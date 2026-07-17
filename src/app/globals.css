@@ -39,126 +39,159 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  /* Secondary card surface (tile / hover backgrounds) and the accent
-   * extras the Settings redesign leans on. The raw --primary-* vars
-   * already exist per-accent below; these mappings expose them (and
-   * --card-2) as Tailwind utilities: bg-card-2, bg-primary-soft,
-   * bg-primary-soft-2, hover:bg-primary-hover. */
   --color-card-2: var(--card-2);
   --color-primary-hover: var(--primary-hover);
   --color-primary-soft: var(--primary-soft);
   --color-primary-soft-2: var(--primary-soft-2);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  /* Revio semantic tokens — DMS operational states */
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-brand-secondary: var(--brand-secondary);
+  --color-subtle: var(--subtle);
+  /* Revio radius scale (8pt system) */
+  --radius-xs: 0.375rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.125rem;
+  --radius-xl: 1.5rem;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 1.875rem;
+  --radius-4xl: 2.25rem;
 }
 
 /* ============================================================
- * THEMING — two orthogonal dimensions
+ * REVIO DESIGN SYSTEM — integrated with shadcn/ui
  *
- *   1. MODE   (light / dark)  → neutral surfaces. Selected with
- *      `document.documentElement.dataset.mode`. Defaults to dark.
- *   2. ACCENT (violet / …)    → the primary color only. Selected
- *      with `document.documentElement.dataset.theme`.
+ * Two orthogonal dimensions (unchanged architecture):
  *
- * The two compose: any accent works in either mode. Neutral
- * tokens (background / card / border / muted / sidebar surfaces /
- * neutral charts / radius) live in the MODE blocks below; accent
- * tokens (--primary*, --ring, --chart-1, --sidebar-primary*,
- * --sidebar-ring) live in the ACCENT blocks. They set disjoint
- * variables, so cascade order between them doesn't matter.
+ *   1. MODE   (light / dark)  → neutral surfaces + Revio default
+ *      accent (primary adapts per mode). `data-mode` on <html>.
+ *   2. ACCENT (revio / …)     → overrides primary only. `data-theme`.
  *
- * `:root` carries the dark-mode + violet defaults so a visitor
- * renders correctly before JS runs; the boot script in
- * layout.tsx replays the saved mode + accent before first paint.
- *
- * The three `--primary-*` extras (hover / soft / soft-2) feed
- * hovered primary buttons and tinted-primary surfaces (sidebar
- * active pill, validation badges).
- *
- * Token shapes come straight from the design handoff at
- * project/Color Themes.html — change one, change the other.
+ * Revio token source: canvas, surface, border, success/warning/danger
+ * for automotive DMS operations (inventory, CRM, credit workflows).
+ * shadcn variables (--background, --primary, --destructive, etc.)
+ * map 1:1 so existing components keep working.
  * ============================================================ */
 
-/* ---- MODE: neutral surfaces ---- */
+/* ---- MODE: Revio neutral surfaces + default accent ---- */
 
 :root,
 html[data-mode="dark"] {
-  --background: oklch(0.13 0.01 260);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.18 0.01 260);
-  --card-2: oklch(0.205 0.01 260);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.18 0.01 260);
-  --popover-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.22 0.01 260);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.22 0.01 260);
-  --muted-foreground: oklch(0.65 0.01 260);
-  --accent: oklch(0.22 0.01 260);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.28 0.01 260);
-  --input: oklch(0.28 0.01 260);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.16 0.01 260);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.22 0.01 260);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.28 0.01 260);
+  /* Surfaces */
+  --background: #111827;
+  --foreground: #f2f4f7;
+  --card: #192333;
+  --card-2: #202d40;
+  --card-foreground: #f2f4f7;
+  --popover: #192333;
+  --popover-foreground: #f2f4f7;
+  --secondary: #28364b;
+  --secondary-foreground: #f2f4f7;
+  --muted: #28364b;
+  --muted-foreground: #b4bdcc;
+  --accent: #202d40;
+  --accent-foreground: #f2f4f7;
+  --border: #2d3a4e;
+  --input: #46556c;
+  --radius: 0.75rem;
+  --sidebar: #151e2e;
+  --sidebar-foreground: #f2f4f7;
+  --sidebar-accent: #202d40;
+  --sidebar-accent-foreground: #f2f4f7;
+  --sidebar-border: #2d3a4e;
+
+  /* DMS semantic — dark */
+  --destructive: #fa8278;
+  --success: #56c995;
+  --success-soft: #173f31;
+  --warning: #f5b967;
+  --warning-soft: #4b371d;
+  --info: #65b4f2;
+  --info-soft: #163a5d;
+  --brand-secondary: #51b9a4;
+  --subtle: #7f8ba0;
+  --focus-soft: rgba(135, 199, 251, 0.22);
+
+  /* Revio default accent — dark */
+  --primary: #55adfa;
+  --primary-foreground: #101828;
+  --primary-hover: #87c7fb;
+  --primary-soft: #123a61;
+  --primary-soft-2: rgba(85, 173, 250, 0.22);
+  --ring: #87c7fb;
+  --chart-1: #55adfa;
+  --chart-2: #51b9a4;
+  --chart-3: #56c995;
+  --chart-4: #f5b967;
+  --chart-5: #7f8ba0;
+  --sidebar-primary: #55adfa;
+  --sidebar-primary-foreground: #101828;
+  --sidebar-ring: #87c7fb;
 }
 
 html[data-mode="light"] {
-  --background: oklch(0.99 0.002 260);
-  --foreground: oklch(0.21 0.01 260);
-  --card: oklch(1 0 0);
-  --card-2: oklch(0.985 0.002 260);
-  --card-foreground: oklch(0.21 0.01 260);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.01 260);
-  --secondary: oklch(0.967 0.003 260);
-  --secondary-foreground: oklch(0.25 0.01 260);
-  --muted: oklch(0.967 0.003 260);
-  --muted-foreground: oklch(0.52 0.015 260);
-  --accent: oklch(0.96 0.004 260);
-  --accent-foreground: oklch(0.25 0.01 260);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0.004 260);
-  --input: oklch(0.922 0.004 260);
-  --chart-2: oklch(0.6 0.1 260);
-  --chart-3: oklch(0.7 0.06 260);
-  --chart-4: oklch(0.8 0.04 260);
-  --chart-5: oklch(0.87 0.03 260);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0.002 260);
-  --sidebar-foreground: oklch(0.21 0.01 260);
-  --sidebar-accent: oklch(0.96 0.004 260);
-  --sidebar-accent-foreground: oklch(0.25 0.01 260);
-  --sidebar-border: oklch(0.922 0.004 260);
+  /* Surfaces */
+  --background: #f7f8fa;
+  --foreground: #101828;
+  --card: #ffffff;
+  --card-2: #f5f7fa;
+  --card-foreground: #101828;
+  --popover: #ffffff;
+  --popover-foreground: #101828;
+  --secondary: #eef0f4;
+  --secondary-foreground: #344054;
+  --muted: #eef0f4;
+  --muted-foreground: #667085;
+  --accent: #f5f7fa;
+  --accent-foreground: #101828;
+  --border: #e4e7ec;
+  --input: #cbd1dc;
+  --radius: 0.75rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #101828;
+  --sidebar-accent: #f5f7fa;
+  --sidebar-accent-foreground: #344054;
+  --sidebar-border: #e4e7ec;
+
+  /* DMS semantic — light */
+  --destructive: #c9362b;
+  --success: #1d8a57;
+  --success-soft: #dbf5e7;
+  --warning: #b65b09;
+  --warning-soft: #fff0d8;
+  --info: #1478d4;
+  --info-soft: #e5f2fd;
+  --brand-secondary: #176b5b;
+  --subtle: #98a2b3;
+  --focus-soft: rgba(20, 120, 212, 0.18);
+
+  /* Revio default accent — light */
+  --primary: #1478d4;
+  --primary-foreground: #ffffff;
+  --primary-hover: #0f64b3;
+  --primary-soft: #e5f2fd;
+  --primary-soft-2: rgba(20, 120, 212, 0.2);
+  --ring: #1478d4;
+  --chart-1: #1478d4;
+  --chart-2: #176b5b;
+  --chart-3: #1d8a57;
+  --chart-4: #b65b09;
+  --chart-5: #98a2b3;
+  --sidebar-primary: #1478d4;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: #1478d4;
 }
 
-/* ---- ACCENT: primary color ---- */
+/* ---- ACCENT: primary color overrides ---- */
 
-:root,
-html[data-theme="violet"] {
-  --primary: oklch(0.526 0.247 293);
-  --primary-foreground: oklch(0.985 0 0);
-  --primary-hover: oklch(0.6 0.22 293);
-  --primary-soft: oklch(0.526 0.247 293 / 0.12);
-  --primary-soft-2: oklch(0.526 0.247 293 / 0.2);
-  --ring: oklch(0.526 0.247 293);
-  --chart-1: oklch(0.526 0.247 293);
-  --sidebar-primary: oklch(0.526 0.247 293);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-ring: oklch(0.526 0.247 293);
+/* Revio is the default — tokens live in MODE blocks above. */
+html[data-theme="revio"] {
+  /* intentional no-op; documents the default accent id */
 }
 
 html[data-theme="emerald"] {

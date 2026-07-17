@@ -1,0 +1,543 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const en = JSON.parse(readFileSync(join(root, "messages/en.json"), "utf8"));
+
+/** Flatten nested JSON to dot-path keys. */
+function flatten(obj, prefix = "") {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      Object.assign(out, flatten(v, key));
+    } else {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+/** Unflatten dot-path keys back to nested JSON. */
+function unflatten(flat) {
+  const out = {};
+  for (const [path, value] of Object.entries(flat)) {
+    const parts = path.split(".");
+    let cur = out;
+    for (let i = 0; i < parts.length - 1; i++) {
+      cur[parts[i]] ??= {};
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = value;
+  }
+  return out;
+}
+
+const flat = flatten(en);
+
+/** Per-key overrides — automotive CRM tone (Colombia). */
+const overrides = {
+  "LoginPage.titleAccept": "Inicia sesión para aceptar",
+  "LoginPage.titleWelcome": "Bienvenido de nuevo",
+  "LoginPage.descAccept": "Inicia sesión y te llevaremos a la invitación.",
+  "LoginPage.descWelcome": "Inicia sesión en tu cuenta",
+  "LoginPage.emailLabel": "Correo electrónico",
+  "LoginPage.emailPlaceholder": "tu@ejemplo.com",
+  "LoginPage.passwordLabel": "Contraseña",
+  "LoginPage.forgotPassword": "¿Olvidaste tu contraseña?",
+  "LoginPage.passwordPlaceholder": "Ingresa tu contraseña",
+  "LoginPage.signingIn": "Iniciando sesión...",
+  "LoginPage.signIn": "Iniciar sesión",
+  "LoginPage.noAccount": "¿No tienes cuenta?",
+  "LoginPage.createAccount": "Crear cuenta",
+
+  "Sidebar.title": "REVIO CRM",
+  "Sidebar.dashboard": "Panel",
+  "Sidebar.inbox": "Conversaciones",
+  "Sidebar.notifications": "Notificaciones",
+  "Sidebar.contacts": "Clientes",
+  "Sidebar.pipelines": "Embudo de ventas",
+  "Sidebar.broadcasts": "Envíos masivos",
+  "Sidebar.automations": "Automatizaciones",
+  "Sidebar.flows": "Flujos",
+  "Sidebar.aiAgents": "Agentes IA",
+  "Sidebar.settings": "Configuración",
+  "Sidebar.beta": "Beta",
+  "Sidebar.unreadConversations":
+    "{count} {count, plural, =1 {conversación sin leer} other {conversaciones sin leer}}",
+  "Sidebar.unreadNotifications":
+    "{count} {count, plural, =1 {notificación sin leer} other {notificaciones sin leer}}",
+  "Sidebar.roleOwner": "Propietario",
+  "Sidebar.roleAdmin": "Administrador",
+  "Sidebar.roleAgent": "Asesor",
+  "Sidebar.roleViewer": "Solo lectura",
+  "Sidebar.closeMenu": "Cerrar menú",
+  "Sidebar.defaultUser": "Usuario",
+  "Sidebar.defaultAvatar": "Avatar",
+  "Sidebar.menuProfile": "Perfil",
+  "Sidebar.menuSettings": "Configuración",
+  "Sidebar.menuSignOut": "Cerrar sesión",
+
+  "Header.dashboard": "Panel",
+  "Header.inbox": "Conversaciones",
+  "Header.notifications": "Notificaciones",
+  "Header.contacts": "Clientes",
+  "Header.pipelines": "Embudo de ventas",
+  "Header.broadcasts": "Envíos masivos",
+  "Header.automations": "Automatizaciones",
+  "Header.settings": "Configuración",
+  "Header.openMenu": "Abrir menú",
+  "Header.openAccountMenu": "Abrir menú de cuenta",
+  "Header.defaultUser": "Usuario",
+  "Header.defaultAvatar": "Avatar",
+  "Header.menuProfile": "Perfil",
+  "Header.menuSettings": "Configuración",
+  "Header.menuSignOut": "Cerrar sesión",
+
+  "ModeToggle.switchMode": "Cambiar a modo {mode}",
+
+  "Dashboard.page.title": "Panel",
+  "Dashboard.page.description":
+    "Analítica en tiempo real de conversaciones, clientes, negocios, envíos masivos y automatizaciones.",
+  "Dashboard.page.activeConversations": "Conversaciones activas",
+  "Dashboard.page.newContactsToday": "Clientes nuevos hoy",
+  "Dashboard.page.openDealsValue": "Valor de negocios abiertos",
+  "Dashboard.page.messagesSentToday": "Mensajes enviados hoy",
+  "Dashboard.page.newTodayVsYesterday": "nuevos hoy vs ayer",
+  "Dashboard.page.vsYesterday": "vs ayer",
+  "Dashboard.page.openDeals":
+    "{count} {count, plural, =1 {negocio abierto} other {negocios abiertos}}",
+  "Dashboard.page.noChange": "Sin cambios {suffix}",
+  "Dashboard.quickActions.newContact": "Nuevo cliente",
+  "Dashboard.quickActions.newDeal": "Nuevo negocio",
+  "Dashboard.quickActions.newBroadcast": "Nuevo envío masivo",
+  "Dashboard.quickActions.newAutomation": "Nueva automatización",
+  "Dashboard.activityFeed.title": "Actividad reciente",
+  "Dashboard.activityFeed.viewAll": "Ver todo →",
+  "Dashboard.activityFeed.noActivity": "Aún no hay actividad",
+  "Dashboard.activityFeed.noActivityHint":
+    "La actividad de mensajes, negocios, envíos masivos y automatizaciones aparecerá aquí.",
+  "Dashboard.activityFeed.showingOf": "Mostrando {visible} de {totalLoaded}{plus}",
+  "Dashboard.activityFeed.show": "Mostrar",
+  "Dashboard.activityFeed.timeS": "hace {sec}s",
+  "Dashboard.activityFeed.timeM": "hace {min}m",
+  "Dashboard.activityFeed.timeH": "hace {hr}h",
+  "Dashboard.activityFeed.timeD": "hace {day}d",
+  "Dashboard.conversationsChart.title": "Conversaciones en el tiempo",
+  "Dashboard.conversationsChart.description": "Volumen diario de mensajes por dirección",
+  "Dashboard.conversationsChart.days": "{count} días",
+  "Dashboard.conversationsChart.noActivity": "No hay actividad de mensajes en este rango",
+  "Dashboard.conversationsChart.noActivityHint":
+    "Envía o recibe mensajes para empezar a llenar este gráfico.",
+  "Dashboard.conversationsChart.incoming": "Entrantes",
+  "Dashboard.conversationsChart.outgoing": "Salientes",
+  "Dashboard.conversationsChart.tooltipIncoming": "{count} entrantes",
+  "Dashboard.conversationsChart.tooltipOutgoing": "{count} salientes",
+  "Dashboard.conversationsChart.ariaLabel": "Conversaciones por día",
+  "Dashboard.pipelineDonut.title": "Valor del embudo",
+  "Dashboard.pipelineDonut.description": "Negocios abiertos por etapa",
+  "Dashboard.pipelineDonut.noOpenDeals": "Aún no hay negocios abiertos",
+  "Dashboard.pipelineDonut.noOpenDealsHint":
+    "Crea negocios en el embudo de ventas para ver el desglose por etapa aquí.",
+  "Dashboard.pipelineDonut.dealCount":
+    "{count} {count, plural, =1 {negocio} other {negocios}}",
+  "Dashboard.pipelineDonut.total": "Total",
+  "Dashboard.pipelineDonut.ariaLabel": "Valor del embudo por etapa",
+  "Dashboard.responseTimeChart.title": "Tiempo promedio de primera respuesta",
+  "Dashboard.responseTimeChart.description":
+    "Minutos para responder al primer mensaje sin contestar del cliente, por día de la semana",
+  "Dashboard.responseTimeChart.target": "meta {minutes}m",
+  "Dashboard.responseTimeChart.thisWeek": "Esta semana:",
+  "Dashboard.responseTimeChart.lastWeek": "Semana pasada:",
+  "Dashboard.responseTimeChart.noReplies": "Aún no hay respuestas registradas",
+  "Dashboard.responseTimeChart.noRepliesHint":
+    "Este gráfico se llena a medida que respondes a los mensajes de los clientes.",
+  "Dashboard.emptyState.title": "Aún no hay datos suficientes",
+
+  "Pipelines.page.selectPipeline": "Seleccionar embudo",
+  "Pipelines.page.noPipelinesYet": "Aún no hay embudos",
+  "Pipelines.page.managePipelines": "Administrar embudos",
+  "Pipelines.page.addPipeline": "Agregar embudo",
+  "Pipelines.page.addDeal": "Agregar negocio",
+  "Pipelines.page.createToStartTracking":
+    "Crea un embudo para empezar a hacer seguimiento de negocios",
+  "Pipelines.page.createPipeline": "Crear embudo",
+  "Pipelines.page.newPipeline": "Nuevo embudo",
+  "Pipelines.page.pipelineName": "Nombre del embudo",
+  "Pipelines.page.pipelineNamePlaceholder": "Ej.: Ventas de vehículos nuevos",
+  "Pipelines.page.defaultStagesDesc":
+    "Las etapas predeterminadas (Nuevo prospecto → Cerrado ganado) se crearán automáticamente.",
+  "Pipelines.page.defaultPipelineName": "Embudo comercial",
+  "Pipelines.page.defaultStages.newLead": "Nuevo prospecto",
+  "Pipelines.page.defaultStages.qualified": "Calificado",
+  "Pipelines.page.defaultStages.proposalSent": "Cotización enviada",
+  "Pipelines.page.defaultStages.negotiation": "Negociación",
+  "Pipelines.page.defaultStages.won": "Cerrado ganado",
+  "Pipelines.page.cancel": "Cancelar",
+  "Pipelines.page.creating": "Creando...",
+  "Pipelines.page.createPipelineBtn": "Crear embudo",
+  "Pipelines.page.toastFailedLoadPipelines": "No se pudieron cargar los embudos",
+  "Pipelines.page.toastFailedMoveDeal": "No se pudo mover el negocio",
+  "Pipelines.page.toastFailedCreatePipeline": "No se pudo crear el embudo",
+  "Pipelines.page.toastPipelineCreated": "Embudo creado",
+  "Pipelines.page.toastNotLinkedToAccount": "Tu perfil no está vinculado a una cuenta.",
+  "Pipelines.board.dropDealHere": "Suelta un negocio aquí",
+  "Pipelines.board.addDeal": "Agregar negocio",
+  "Pipelines.card.noContact": "Sin cliente",
+  "Pipelines.card.won": "Ganado",
+  "Pipelines.card.lost": "Perdido",
+  "Pipelines.form.editDeal": "Editar negocio",
+  "Pipelines.form.newDeal": "Nuevo negocio",
+  "Pipelines.form.title": "Título",
+  "Pipelines.form.titlePlaceholder": "Título del negocio",
+  "Pipelines.form.contact": "Cliente",
+  "Pipelines.form.selectContact": "Seleccionar un cliente",
+  "Pipelines.form.linkToConversation": "Vincular a conversación",
+  "Pipelines.form.value": "Valor",
+  "Pipelines.form.currency": "Moneda",
+  "Pipelines.form.expectedCloseDate": "Fecha estimada de cierre",
+  "Pipelines.form.stage": "Etapa",
+  "Pipelines.form.assignedTo": "Asignado a",
+  "Pipelines.form.unassigned": "Sin asignar",
+  "Pipelines.form.notes": "Notas",
+  "Pipelines.form.notesPlaceholder": "Agregar notas...",
+  "Pipelines.form.status": "Estado",
+  "Pipelines.form.markAsWon": "Marcar como ganado",
+  "Pipelines.form.markAsLost": "Marcar como perdido",
+  "Pipelines.form.reopenDeal": "Reabrir negocio",
+  "Pipelines.form.cancel": "Cancelar",
+  "Pipelines.form.saving": "Guardando...",
+  "Pipelines.form.saveChanges": "Guardar cambios",
+  "Pipelines.form.createDeal": "Crear negocio",
+  "Pipelines.form.deletePrompt": "¿Eliminar este negocio?",
+  "Pipelines.form.confirm": "Confirmar",
+  "Pipelines.form.deleting": "Eliminando...",
+  "Pipelines.form.deleteDeal": "Eliminar negocio",
+  "Pipelines.form.toastRequired": "Título, cliente y etapa son obligatorios",
+  "Pipelines.form.toastFailedSave": "No se pudo guardar el negocio",
+  "Pipelines.form.toastNotSignedIn": "No has iniciado sesión",
+  "Pipelines.form.toastNotLinked": "Tu perfil no está vinculado a una cuenta.",
+  "Pipelines.form.toastFailedCreate": "No se pudo crear el negocio",
+  "Pipelines.form.toastUpdated": "Negocio actualizado",
+  "Pipelines.form.toastCreated": "Negocio creado",
+  "Pipelines.form.toastFailedStatus": "No se pudo actualizar el estado del negocio",
+  "Pipelines.form.toastMarkedWon": "Marcado como ganado",
+  "Pipelines.form.toastMarkedLost": "Marcado como perdido",
+  "Pipelines.form.toastReopened": "Negocio reabierto",
+  "Pipelines.form.toastFailedDelete": "No se pudo eliminar el negocio",
+  "Pipelines.form.toastDeleted": "Negocio eliminado",
+  "Pipelines.settings.managePipeline": "Administrar embudo",
+  "Pipelines.settings.deletePipeline": "Eliminar embudo",
+  "Pipelines.settings.deletePipelineDesc":
+    "Esto archivará todos los negocios de este embudo. Esta acción no se puede deshacer.",
+  "Pipelines.settings.cancel": "Cancelar",
+  "Pipelines.settings.deleting": "Eliminando...",
+  "Pipelines.settings.deletePipelineBtn": "Eliminar embudo",
+  "Pipelines.settings.pipelineName": "Nombre del embudo",
+  "Pipelines.settings.stages": "Etapas",
+  "Pipelines.settings.newStageNamePlaceholder": "Nombre de la nueva etapa",
+  "Pipelines.settings.add": "Agregar",
+  "Pipelines.settings.createNewPipeline": "Crear un nuevo embudo",
+  "Pipelines.settings.saving": "Guardando...",
+  "Pipelines.settings.saveChanges": "Guardar cambios",
+  "Pipelines.settings.dragToReorder": "Arrastrar para reordenar",
+  "Pipelines.settings.changeColor": "Cambiar color",
+  "Pipelines.settings.toastFailedSave": "No se pudo guardar el embudo",
+  "Pipelines.settings.toastSaved": "Embudo guardado",
+  "Pipelines.settings.toastFailedAddStage": "No se pudo agregar la etapa",
+  "Pipelines.settings.toastMoveOrDeleteDeals":
+    "Primero mueve o elimina los negocios en esta etapa",
+  "Pipelines.settings.toastFailedDeleteStage": "No se pudo eliminar la etapa",
+  "Pipelines.settings.toastFailedDeletePipeline": "No se pudo eliminar el embudo",
+  "Pipelines.settings.toastDeleted": "Embudo eliminado",
+  "Pipelines.analytics.totalDeals": "Total de negocios",
+  "Pipelines.analytics.totalDealsTooltip":
+    "Cantidad de negocios en este embudo que no están marcados como perdidos. Los ganados también se incluyen.",
+  "Pipelines.analytics.pipelineValue": "Valor del embudo",
+  "Pipelines.analytics.pipelineValueTooltip":
+    "Suma de los valores de todos los negocios en este embudo, excluyendo los marcados como perdidos.",
+  "Pipelines.analytics.avgDealSize": "Valor promedio del negocio",
+  "Pipelines.analytics.avgDealSizeTooltip":
+    "Valor del embudo dividido por el total de negocios — el valor promedio de un negocio no perdido.",
+  "Pipelines.analytics.weightedValue": "Valor ponderado",
+  "Pipelines.analytics.weightedValueTooltip":
+    "Ingreso esperado: valor de cada negocio abierto × probabilidad de su etapa. Primera etapa ≈ 10%, las etapas avanzan hasta 90%, Ganado = 100%. Se excluyen los perdidos.",
+  "Pipelines.analytics.wonThisMonth": "Ganados este mes",
+  "Pipelines.analytics.wonThisMonthTooltip":
+    "Negocios marcados como ganados desde el primer día del mes actual.",
+  "Pipelines.analytics.lostThisMonth": "Perdidos este mes",
+  "Pipelines.analytics.lostThisMonthTooltip":
+    "Negocios marcados como perdidos desde el primer día del mes actual.",
+  "Pipelines.analytics.howCalculated": "Cómo se calcula {label}",
+
+  "Settings.pageTitle": "Configuración",
+  "Settings.pageDesc":
+    "Todo en un solo lugar — tu cuenta y tu espacio de trabajo. Elige una sección para administrarla.",
+  "Settings.sections.deals": "Negocios y moneda",
+  "Settings.deals.title": "Negocios y moneda",
+  "Settings.deals.description":
+    "La moneda usada para nuevos negocios y para los totales del embudo y el panel.",
+  "Settings.deals.defaultCurrency": "Moneda predeterminada",
+  "Settings.deals.defaultCurrencyDesc":
+    "Los nuevos negocios usan esta moneda por defecto, y los totales del embudo y el panel se muestran en ella. Los negocios existentes conservan la moneda con la que se guardaron.",
+  "Settings.deals.currencyLabel": "Moneda",
+  "Settings.deals.adminOnlyHint": "Solo los administradores pueden cambiar la moneda predeterminada.",
+  "Settings.deals.save": "Guardar",
+  "Settings.deals.saving": "Guardando...",
+  "Settings.deals.saveFailed": "No se pudo guardar la moneda predeterminada",
+  "Settings.deals.saveSuccess": "Moneda predeterminada actualizada",
+
+  // Inbox
+  "Inbox.page.whatsappNotConnected":
+    "WhatsApp® no está conectado. Ve a Configuración para conectar tu cuenta.",
+  "Inbox.conversationList.searchPlaceholder": "Buscar conversaciones...",
+  "Inbox.conversationList.filterAll": "Todas",
+  "Inbox.conversationList.filterUnread": "Sin leer",
+  "Inbox.conversationList.filterOpen": "Abiertas",
+  "Inbox.conversationList.filterPending": "Pendientes",
+  "Inbox.conversationList.filterClosed": "Cerradas",
+  "Inbox.conversationList.tags": "Etiquetas",
+  "Inbox.conversationList.company": "Empresa",
+  "Inbox.conversationList.allCompanies": "Todas las empresas",
+  "Inbox.conversationList.clearAll": "Limpiar todo",
+  "Inbox.conversationList.noConversations": "No se encontraron conversaciones",
+  "Inbox.conversationList.noMessagesYet": "Aún no hay mensajes",
+  "Inbox.conversationList.unknown": "Desconocido",
+  "Inbox.messageThread.backToConversations": "Volver a conversaciones",
+  "Inbox.messageThread.hideContactPanel": "Ocultar panel del cliente",
+  "Inbox.messageThread.showContactPanel": "Mostrar panel del cliente",
+  "Inbox.messageThread.hideContact": "Ocultar cliente",
+  "Inbox.messageThread.showContact": "Mostrar cliente",
+  "Inbox.messageThread.refresh": "Actualizar",
+  "Inbox.messageThread.refreshConversation": "Actualizar conversación",
+  "Inbox.messageThread.status": "Estado",
+  "Inbox.messageThread.statusOpen": "Abierta",
+  "Inbox.messageThread.statusPending": "Pendiente",
+  "Inbox.messageThread.statusClosed": "Cerrada",
+  "Inbox.messageThread.assign": "Asignar",
+  "Inbox.messageThread.assigned": "Asignada",
+  "Inbox.messageThread.unassign": "Desasignar",
+  "Inbox.messageThread.noTeammates": "No hay compañeros disponibles",
+  "Inbox.messageThread.me": " (yo)",
+  "Inbox.messageThread.noMessagesYet": "Aún no hay mensajes",
+  "Inbox.messageThread.sendTemplateHint":
+    "Envía una plantilla para iniciar la conversación",
+  "Inbox.messageThread.selectConversation": "Selecciona una conversación",
+  "Inbox.messageThread.selectConversationHint":
+    "Elige una conversación a la izquierda para empezar a escribir",
+  "Inbox.messageThread.today": "Hoy",
+  "Inbox.messageThread.yesterday": "Ayer",
+  "Inbox.sessionTimer.expired": "Expirada",
+  "Inbox.sessionTimer.xhRemaining": "{hours}h restantes",
+  "Inbox.sessionTimer.xmRemaining": "{minutes}m restantes",
+  "Inbox.sessionTimer.noCustomerMessages": "Sin mensajes del cliente",
+  "Inbox.composer.draftHint":
+    "Toca ✨ para redactar una respuesta con IA — puedes editarla antes de enviar",
+  "Inbox.composer.sessionExpiredHint":
+    "La ventana de 24 horas expiró. Usa una plantilla para retomar el contacto.",
+  "Inbox.composer.templates": "Plantillas",
+  "Inbox.composer.readOnlyPlaceholder":
+    "Solo lectura — los usuarios de solo lectura pueden ver pero no responder",
+  "Inbox.composer.sessionExpiredPlaceholder":
+    "Sesión expirada — usa una plantilla",
+  "Inbox.composer.typeMessagePlaceholder":
+    "Escribe un mensaje... (Mayús+Enter para nueva línea)",
+  "Inbox.composer.readOnlyTitle":
+    "Solo lectura — tu rol no permite enviar mensajes",
+  "Inbox.composer.recording": "Grabando… {current} / {max}",
+  "Inbox.composer.cancel": "Cancelar",
+  "Inbox.composer.stopAndAttach": "Detener y adjuntar",
+  "Inbox.composer.attachMedia": "Adjuntar multimedia",
+  "Inbox.composer.photo": "Foto",
+  "Inbox.composer.video": "Video",
+  "Inbox.composer.document": "Documento",
+  "Inbox.composer.voiceNote": "Nota de voz",
+  "Inbox.composer.sendTemplate": "Enviar plantilla",
+  "Inbox.composer.draftWithAI": "Redactar respuesta con IA",
+  "Inbox.composer.addCaption": "Agregar pie de foto…",
+  "Inbox.composer.removeAttachment": "Quitar adjunto",
+  "Inbox.composer.moreActions": "Más",
+  "Inbox.composer.interactiveMessage": "Mensaje interactivo",
+  "Inbox.composer.quickReplies": "Respuestas rápidas",
+  "Inbox.composer.quickRepliesEmpty":
+    "Aún no hay respuestas rápidas. Agrégalas en Configuración → Respuestas rápidas.",
+  "Inbox.composer.saveAsQuickReply": "Guardar como respuesta rápida",
+  "Inbox.composer.send": "Enviar",
+  "Inbox.composer.quickReplyNamePrompt": "Nombre de esta respuesta rápida:",
+  "Inbox.composer.quickReplySaved": "Guardada como respuesta rápida.",
+  "Inbox.composer.quickReplySaveError": "No se pudo guardar la respuesta rápida.",
+  "Inbox.sidebar.contactInfo": "Información del cliente",
+  "Inbox.sidebar.tags": "Etiquetas",
+  "Inbox.sidebar.notes": "Notas",
+  "Inbox.sidebar.deals": "Negocios",
+  "Inbox.sidebar.noTags": "Sin etiquetas",
+  "Inbox.sidebar.noDeals": "Sin negocios",
+  "Inbox.sidebar.addNotePlaceholder": "Agregar una nota...",
+  "Inbox.actions.reply": "Responder",
+  "Inbox.actions.copyText": "Copiar texto",
+  "Inbox.actions.delete": "Eliminar",
+  "Inbox.actions.react": "Reaccionar",
+  "Inbox.actions.reactWith": "Reaccionar con {emoji}",
+  "Inbox.actions.nothingToCopy": "Nada para copiar",
+  "Inbox.actions.copied": "Copiado",
+  "Inbox.actions.copyFailed": "Error al copiar",
+
+  // Contacts
+  "Contacts.page.title": "Clientes",
+  "Contacts.page.subtitle": "Administra tu lista de clientes. {count} clientes en total.",
+  "Contacts.page.subtitleZero": "Administra tu lista de clientes.",
+  "Contacts.page.customFieldsBtn": "Campos personalizados",
+  "Contacts.page.importBtn": "Importar",
+  "Contacts.page.addContactBtn": "Agregar cliente",
+  "Contacts.page.searchPlaceholder": "Buscar por nombre, teléfono o correo...",
+  "Contacts.page.filterByTags": "Filtrar por etiquetas",
+  "Contacts.page.clearAll": "Limpiar todo",
+  "Contacts.page.noTagsYet": "Aún no hay etiquetas.",
+  "Contacts.page.selectedCount": "{count} seleccionados",
+  "Contacts.page.clearSelection": "Limpiar",
+  "Contacts.page.deleteSelected": "Eliminar seleccionados",
+  "Contacts.page.loading": "Cargando clientes...",
+  "Contacts.page.noContactsMatch": "Ningún cliente coincide con tus filtros.",
+  "Contacts.page.noContactsYet": "Aún no hay clientes.",
+  "Contacts.page.addFirstContact": "Agrega tu primer cliente",
+  "Contacts.page.unnamed": "Sin nombre",
+  "Contacts.page.editAction": "Editar",
+  "Contacts.page.deleteAction": "Eliminar",
+  "Contacts.page.deleteContactTitle": "Eliminar cliente",
+  "Contacts.page.deleteContactDesc":
+    "¿Estás seguro de que deseas eliminar a {name}? Esta acción no se puede deshacer.",
+  "Contacts.page.cancel": "Cancelar",
+  "Contacts.page.deleteBtn": "Eliminar",
+  "Contacts.form.save": "Guardar cliente",
+  "Contacts.detailView.actions.edit": "Editar",
+  "Contacts.detailView.actions.delete": "Eliminar",
+  "Contacts.detailView.saveChangesBtn": "Guardar cambios",
+};
+
+/** Common word/phrase replacements applied to any key not in overrides. */
+const phraseRules = [
+  [/Save Changes/g, "Guardar cambios"],
+  [/Save Contact/g, "Guardar cliente"],
+  [/Save Configuration/g, "Guardar configuración"],
+  [/Save as Draft/g, "Guardar borrador"],
+  [/Save Draft/g, "Guardar borrador"],
+  [/Save document/g, "Guardar documento"],
+  [/Save changes/g, "Guardar cambios"],
+  [/\bSave\b/g, "Guardar"],
+  [/\bEdit\b/g, "Editar"],
+  [/\bDelete\b/g, "Eliminar"],
+  [/\bCancel\b/g, "Cancelar"],
+  [/\bConfirm\b/g, "Confirmar"],
+  [/\bCreate\b/g, "Crear"],
+  [/\bUpdate\b/g, "Actualizar"],
+  [/\bRemove\b/g, "Quitar"],
+  [/\bRetry\b/g, "Reintentar"],
+  [/\bClose\b/g, "Cerrar"],
+  [/\bBack\b/g, "Volver"],
+  [/\bNext\b/g, "Siguiente"],
+  [/\bLoading…/g, "Cargando…"],
+  [/\bLoading\.\.\./g, "Cargando..."],
+  [/\bSaving…/g, "Guardando…"],
+  [/\bSaving\.\.\./g, "Guardando..."],
+  [/\bDeleting…/g, "Eliminando…"],
+  [/\bDeleting\.\.\./g, "Eliminando..."],
+  [/\bContacts\b/g, "Clientes"],
+  [/\bContact\b/g, "Cliente"],
+  [/\bcontacts\b/g, "clientes"],
+  [/\bcontact\b/g, "cliente"],
+  [/\bDeals\b/g, "Negocios"],
+  [/\bDeal\b/g, "Negocio"],
+  [/\bdeals\b/g, "negocios"],
+  [/\bdeal\b/g, "negocio"],
+  [/\bPipelines\b/g, "Embudos de ventas"],
+  [/\bPipeline\b/g, "Embudo de ventas"],
+  [/\bpipelines\b/g, "embudos de ventas"],
+  [/\bpipeline\b/g, "embudo de ventas"],
+  [/\bBroadcasts\b/g, "Envíos masivos"],
+  [/\bBroadcast\b/g, "Envío masivo"],
+  [/\bAutomations\b/g, "Automatizaciones"],
+  [/\bAutomation\b/g, "Automatización"],
+  [/\bSettings\b/g, "Configuración"],
+  [/\bDashboard\b/g, "Panel"],
+  [/\bInbox\b/g, "Conversaciones"],
+  [/\bTemplates\b/g, "Plantillas"],
+  [/\bTemplate\b/g, "Plantilla"],
+  [/\btemplates\b/g, "plantillas"],
+  [/\btemplate\b/g, "plantilla"],
+  [/\bTags\b/g, "Etiquetas"],
+  [/\bTag\b/g, "Etiqueta"],
+  [/\btags\b/g, "etiquetas"],
+  [/\btag\b/g, "etiqueta"],
+  [/\bNotes\b/g, "Notas"],
+  [/\bNote\b/g, "Nota"],
+  [/\bAdmin\b/g, "Administrador"],
+  [/\bAgent\b/g, "Asesor"],
+  [/\bOwner\b/g, "Propietario"],
+  [/\bViewer\b/g, "Solo lectura"],
+  [/\bProfile\b/g, "Perfil"],
+  [/\bSign out\b/g, "Cerrar sesión"],
+  [/\bSign in\b/g, "Iniciar sesión"],
+  [/\bEmail\b/g, "Correo electrónico"],
+  [/\bPassword\b/g, "Contraseña"],
+  [/\bPhone\b/g, "Teléfono"],
+  [/\bName\b/g, "Nombre"],
+  [/\bCompany\b/g, "Empresa"],
+  [/\bStatus\b/g, "Estado"],
+  [/\bStage\b/g, "Etapa"],
+  [/\bStages\b/g, "Etapas"],
+  [/\bOpen\b/g, "Abierta"],
+  [/\bClosed\b/g, "Cerrada"],
+  [/\bPending\b/g, "Pendiente"],
+  [/\bUnread\b/g, "Sin leer"],
+  [/\bAll\b/g, "Todas"],
+  [/\bSearch\b/g, "Buscar"],
+  [/\bImport\b/g, "Importar"],
+  [/\bExport\b/g, "Exportar"],
+  [/\bSend\b/g, "Enviar"],
+  [/\bReply\b/g, "Responder"],
+  [/\bActive\b/g, "Activo"],
+  [/\bDraft\b/g, "Borrador"],
+  [/\bFailed\b/g, "Fallido"],
+  [/\bSuccess\b/g, "Éxito"],
+  [/\bUnknown\b/g, "Desconocido"],
+  [/\bToday\b/g, "Hoy"],
+  [/\bYesterday\b/g, "Ayer"],
+  [/\bFlows\b/g, "Flujos"],
+  [/\bFlow\b/g, "Flujo"],
+  [/\blead source\b/gi, "origen del prospecto"],
+  [/\bLead\b/g, "Prospecto"],
+  [/\bleads\b/g, "prospectos"],
+  [/\bWon\b/g, "Ganado"],
+  [/\bLost\b/g, "Perdido"],
+  [/\bAdd\b/g, "Agregar"],
+  [/\bNew\b/g, "Nuevo"],
+  [/\bManage\b/g, "Administrar"],
+  [/\bSelect\b/g, "Seleccionar"],
+  [/\bCopy\b/g, "Copiar"],
+  [/\bDone\b/g, "Listo"],
+  [/\bOptional\b/g, "Opcional"],
+  [/\bRequired\b/g, "Obligatorio"],
+];
+
+function autoTranslate(text) {
+  if (typeof text !== "string") return text;
+  let out = text;
+  for (const [pattern, replacement] of phraseRules) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+const translated = {};
+for (const [key, value] of Object.entries(flat)) {
+  translated[key] = overrides[key] ?? autoTranslate(value);
+}
+
+writeFileSync(
+  join(root, "messages/es-CO.json"),
+  `${JSON.stringify(unflatten(translated), null, 2)}\n`,
+  "utf8",
+);
+
+console.log("Wrote messages/es-CO.json with", Object.keys(translated).length, "keys");

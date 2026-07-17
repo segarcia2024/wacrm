@@ -8,13 +8,13 @@
  *
  * Adding a new theme is a two-step change:
  *   1. Append the new `html[data-theme="<id>"]` block in globals.css
- *      with every token from an existing theme (use violet as the
+ *      with every token from an existing theme (use revio as the
  *      shape reference).
  *   2. Add an entry below. The order here drives the picker grid.
  */
 
 export const THEME_IDS = [
-  "violet",
+  "revio",
   "emerald",
   "cobalt",
   "amber",
@@ -23,7 +23,7 @@ export const THEME_IDS = [
 
 export type ThemeId = (typeof THEME_IDS)[number];
 
-export const DEFAULT_THEME: ThemeId = "violet";
+export const DEFAULT_THEME: ThemeId = "revio";
 
 export const STORAGE_KEY = "wacrm.theme";
 
@@ -68,10 +68,10 @@ export interface ThemeMeta {
 
 export const THEMES: ReadonlyArray<ThemeMeta> = [
   {
-    id: "violet",
-    name: "Violet",
-    tagline: "The default — confident, slightly playful.",
-    swatch: "oklch(0.526 0.247 293)",
+    id: "revio",
+    name: "Revio",
+    tagline: "Azul operacional — diseñado para el ritmo del DMS automotriz.",
+    swatch: "#1478d4",
   },
   {
     id: "emerald",

@@ -4,62 +4,82 @@ import {
   DEFAULT_CURRENCY,
   formatCurrency,
   formatCurrencyShort,
+  isValidDealValue,
+  parseDealValue,
+  sanitizeDealValueInput,
 } from "./currency";
 
+describe("parseDealValue", () => {
+  it("parses integers and rounds floats", () => {
+    expect(parseDealValue("148900000")).toBe(148_900_000);
+    expect(parseDealValue(132500.7)).toBe(132_501);
+    expect(parseDealValue("148.900.000")).toBe(148_900_000);
+  });
+
+  it("returns 0 for empty or invalid input", () => {
+    expect(parseDealValue("")).toBe(0);
+    expect(parseDealValue(null)).toBe(0);
+    expect(parseDealValue(Number.NaN)).toBe(0);
+  });
+
+  it("never returns negative values", () => {
+    expect(parseDealValue(-500)).toBe(0);
+  });
+});
+
+describe("isValidDealValue", () => {
+  it("accepts non-negative integers only", () => {
+    expect(isValidDealValue(0)).toBe(true);
+    expect(isValidDealValue(148_900_000)).toBe(true);
+    expect(isValidDealValue(10.5)).toBe(false);
+    expect(isValidDealValue(-1)).toBe(false);
+    expect(isValidDealValue("100")).toBe(false);
+  });
+});
+
+describe("sanitizeDealValueInput", () => {
+  it("strips non-digit characters", () => {
+    expect(sanitizeDealValueInput("148.900.000")).toBe("148900000");
+    expect(sanitizeDealValueInput("abc")).toBe("");
+    expect(sanitizeDealValueInput("")).toBe("");
+  });
+});
+
 describe("formatCurrency", () => {
-  it("formats whole amounts with no minor units", () => {
-    // Use a non-breaking-space-tolerant check: Intl may insert NBSP.
-    const out = formatCurrency(1234, "USD");
-    expect(out).toContain("1,234");
+  it("formats COP with es-CO locale and no decimals", () => {
+    const out = formatCurrency(1_234);
+    expect(out).toContain("1.234");
+    expect(out).not.toContain(",00");
     expect(out).not.toContain(".00");
   });
 
-  it("defaults to USD when no currency is given", () => {
+  it("defaults to COP", () => {
     expect(formatCurrency(10)).toBe(formatCurrency(10, DEFAULT_CURRENCY));
   });
 
-  it("treats an empty-string currency as the default", () => {
-    expect(formatCurrency(10, "")).toBe(formatCurrency(10, DEFAULT_CURRENCY));
+  it("ignores legacy currency codes and always formats as COP", () => {
+    expect(formatCurrency(10, "USD")).toBe(formatCurrency(10, "COP"));
   });
 
   it("coerces non-finite values to 0", () => {
-    expect(formatCurrency(Number.NaN, "USD")).toContain("0");
+    expect(formatCurrency(Number.NaN)).toContain("0");
   });
 
-  it("renders a well-formed but unknown ISO code without throwing", () => {
-    // Intl is lenient here — it uses the code as the symbol.
-    const out = formatCurrency(1234, "ZZZ");
-    expect(out).toContain("ZZZ");
-    expect(out).toContain("1,234");
-  });
-
-  it("never throws on a structurally invalid code (no DB CHECK on deals.currency)", () => {
-    for (const bad of ["United States", "US", "USDD", "12", "u$d"]) {
-      expect(() => formatCurrency(1234, bad)).not.toThrow();
-      expect(formatCurrency(1234, bad)).toContain("1,234");
-    }
-  });
-
-  it("formats every offered currency without throwing", () => {
+  it("formats the only supported currency without throwing", () => {
     for (const c of CURRENCIES) {
-      expect(() => formatCurrency(1000, c.code)).not.toThrow();
+      expect(() => formatCurrency(1_000_000, c.code)).not.toThrow();
     }
   });
 });
 
 describe("formatCurrencyShort", () => {
-  it("abbreviates millions and thousands with the currency symbol", () => {
-    expect(formatCurrencyShort(2_500_000, "USD")).toBe("$2.5M");
-    expect(formatCurrencyShort(3_400, "USD")).toBe("$3.4k");
-    expect(formatCurrencyShort(900, "USD")).toBe("$900");
+  it("abbreviates millions and thousands with the COP symbol", () => {
+    expect(formatCurrencyShort(2_500_000)).toBe("$2.5M");
+    expect(formatCurrencyShort(3_400)).toBe("$3.4k");
+    expect(formatCurrencyShort(900)).toBe("$900");
   });
 
-  it("uses the matching symbol for non-USD currencies", () => {
-    expect(formatCurrencyShort(1_000, "EUR")).toBe("€1.0k");
-    expect(formatCurrencyShort(1_000, "INR")).toBe("₹1.0k");
-  });
-
-  it("falls back to the code prefix for unknown currencies (no throw)", () => {
-    expect(formatCurrencyShort(1_000, "ZZZ")).toBe("ZZZ 1.0k");
+  it("always uses COP regardless of legacy currency arg", () => {
+    expect(formatCurrencyShort(1_000, "USD")).toBe("$1.0k");
   });
 });

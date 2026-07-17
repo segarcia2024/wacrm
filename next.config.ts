@@ -3,6 +3,9 @@ import createNextIntlPlugin from "next-intl/plugin";
 
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
+/** Raíz real de la app (evita que Next infiera el monorepo padre REVIO CRM). */
+const appRoot = __dirname;
+
 /**
  * Baseline security headers applied to every response.
  *
@@ -64,6 +67,13 @@ const SECURITY_HEADERS = [
 ] as const;
 
 const nextConfig: NextConfig = {
+  /** Salida mínima para despliegue Docker (ver DEPLOYMENT.md). */
+  output: "standalone",
+  outputFileTracingRoot: appRoot,
+  turbopack: {
+    root: appRoot,
+  },
+
   /**
    * Cache-Control policy.
    *

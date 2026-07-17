@@ -106,6 +106,15 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
       if (!nonEmpty(c.title)) {
         issues.push({ path: `${path}.title`, message: 'title is required' })
       }
+      if (c.value !== undefined && c.value !== null && c.value !== '') {
+        const n = Number(c.value)
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+          issues.push({
+            path: `${path}.value`,
+            message: 'deal value must be a non-negative whole number (COP)',
+          })
+        }
+      }
       break
     case 'wait':
       if (typeof c.amount !== 'number' || !Number.isFinite(c.amount) || c.amount <= 0) {

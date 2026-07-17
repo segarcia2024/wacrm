@@ -366,7 +366,9 @@ export interface Deal {
   conversation_id?: string;
   assigned_to?: string;
   title: string;
+  /** Deal value in whole Colombian Pesos (COP). */
   value: number;
+  /** Always COP — kept for legacy rows; new writes use DEFAULT_CURRENCY. */
   currency?: string;
   notes?: string;
   expected_close_date?: string;

@@ -120,6 +120,21 @@ describe("validateStepsForActivation", () => {
     ]);
   });
 
+  it("flags create_deal when value is not a whole number", () => {
+    const issues = validateStepsForActivation([
+      {
+        step_type: "create_deal",
+        step_config: {
+          pipeline_id: "p1",
+          stage_id: "s1",
+          title: "CX-5",
+          value: 148900000.5,
+        },
+      },
+    ]);
+    expect(issues.map((i) => i.path)).toEqual(["steps[0].value"]);
+  });
+
   it("validates send_buttons / send_list interactive payloads", () => {
     const good = validateStepsForActivation([
       {

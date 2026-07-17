@@ -1,106 +1,109 @@
 /**
- * Currency — single source of truth for deal-value formatting and
- * the currency picker options.
+ * Currency — single source of truth for deal-value formatting in COP.
  *
- * Before this module, ~6 components each defined their own
- * `Intl.NumberFormat(..., { currency: "USD" })` helper with USD
- * baked in. The default currency is now configurable per account
- * (accounts.default_currency, migration 021), so every formatter
- * takes a currency and falls back to DEFAULT_CURRENCY only when
- * nothing is known.
+ * The DMS operates exclusively in Colombian Pesos (COP). Values are
+ * always whole numbers (no centavos). Formatting uses `es-CO` locale
+ * via the native Intl API.
  */
 
-/** App-wide fallback when no account/deal currency is available. */
-export const DEFAULT_CURRENCY = "USD";
+/** ISO-4217 code used across the app and stored in the DB. */
+export const DEFAULT_CURRENCY = "COP";
+
+/** BCP-47 locale for currency display. */
+export const CURRENCY_LOCALE = "es-CO";
 
 export interface CurrencyOption {
-  /** ISO-4217 code, e.g. "USD". Stored verbatim in the DB. */
   code: string;
-  /** Human label for the dropdown, e.g. "US Dollar". */
   label: string;
-  /** Symbol for compact display, e.g. "$". */
   symbol: string;
 }
 
-/**
- * The currencies offered in pickers. Codes must be valid ISO-4217 so
- * `Intl.NumberFormat` renders the right symbol/grouping. Extend this
- * list to offer more — nothing else needs to change.
- */
+/** Single supported currency for the Colombian DMS. */
 export const CURRENCIES: CurrencyOption[] = [
-  { code: "USD", label: "US Dollar", symbol: "$" },
-  { code: "EUR", label: "Euro", symbol: "€" },
-  { code: "GBP", label: "British Pound", symbol: "£" },
-  { code: "INR", label: "Indian Rupee", symbol: "₹" },
-  { code: "AUD", label: "Australian Dollar", symbol: "A$" },
-  { code: "CAD", label: "Canadian Dollar", symbol: "C$" },
-  { code: "BRL", label: "Brazilian Real", symbol: "R$" },
-  { code: "JPY", label: "Japanese Yen", symbol: "¥" },
-  { code: "CNY", label: "Chinese Yuan", symbol: "¥" },
-  { code: "AED", label: "UAE Dirham", symbol: "د.إ" },
-  { code: "ZAR", label: "South African Rand", symbol: "R" },
-  { code: "NGN", label: "Nigerian Naira", symbol: "₦" },
-  { code: "SGD", label: "Singapore Dollar", symbol: "S$" },
-  { code: "MXN", label: "Mexican Peso", symbol: "$" },
+  { code: "COP", label: "Peso colombiano", symbol: "$" },
 ];
 
+const copFormatter = new Intl.NumberFormat(CURRENCY_LOCALE, {
+  style: "currency",
+  currency: DEFAULT_CURRENCY,
+  maximumFractionDigits: 0,
+});
+
+const copIntegerFormatter = new Intl.NumberFormat(CURRENCY_LOCALE, {
+  maximumFractionDigits: 0,
+});
+
+/** Compact-display symbol extracted once from Intl (typically "$"). */
+const COP_SYMBOL =
+  copFormatter.formatToParts(0).find((p) => p.type === "currency")?.value ??
+  "$";
+
 /**
- * Format a deal value as a currency string. Whole-number output
- * (no minor units) — deal values are tracked to the dollar across
- * the app. `currency` defaults to USD so callers with nothing better
- * stay safe, but pass the account/deal currency wherever known.
- *
- * Total by design: `Intl.NumberFormat` throws a RangeError on a
- * structurally invalid currency code, and `deals.currency` carries
- * NO DB CHECK (only `accounts.default_currency` does), so legacy
- * rows, imports, or hand-edited data can hold malformed values like
- * "United States". We never let that crash a render — on a bad code
- * we fall back to "CODE 1,234".
+ * Parse a deal value input into a non-negative integer (COP).
+ * Strips grouping separators and rejects fractional amounts.
+ */
+export function parseDealValue(
+  raw: string | number | null | undefined,
+): number {
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw)) return 0;
+    return Math.max(0, Math.round(raw));
+  }
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  if (!digits) return 0;
+  const n = Number.parseInt(digits, 10);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+/**
+ * Returns true when `value` is a valid whole-number COP amount.
+ */
+export function isValidDealValue(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Format a deal value as Colombian Pesos. Always uses COP regardless
+ * of any legacy `currency` argument kept for call-site compatibility.
  */
 export function formatCurrency(
   value: number,
-  currency: string = DEFAULT_CURRENCY,
+  _currency: string = DEFAULT_CURRENCY,
 ): string {
-  const code = (currency || DEFAULT_CURRENCY).trim();
-  const amount = Number(value) || 0;
+  const amount = parseDealValue(value);
   try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: code,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
+    return copFormatter.format(amount);
   } catch {
-    // Invalid ISO code — show the raw code + grouped number so the
-    // value is still legible instead of throwing.
-    return `${code} ${new Intl.NumberFormat(undefined, {
-      maximumFractionDigits: 0,
-    }).format(amount)}`;
+    return `${DEFAULT_CURRENCY} ${copIntegerFormatter.format(amount)}`;
   }
 }
 
 /**
  * Compact currency for tight spaces (donut center, legend rows):
- * "$1.2M" / "€34.5k" / "₹900". Uses the currency's symbol from
- * CURRENCIES, falling back to the code when we don't carry a symbol.
+ * "$2.5M" / "$3.4k" / "$900".
  */
 export function formatCurrencyShort(
   value: number,
-  currency: string = DEFAULT_CURRENCY,
+  _currency: string = DEFAULT_CURRENCY,
 ): string {
-  const code = currency || DEFAULT_CURRENCY;
-  const symbol = CURRENCIES.find((c) => c.code === code)?.symbol ?? `${code} `;
-  return `${symbol}${formatCompactNumber(value)}`;
+  return `${COP_SYMBOL}${formatCompactNumber(parseDealValue(value))}`;
 }
 
 /**
- * Compact number for tight spaces (chart tiles, legends): 1_234 → "1.2k",
- * 1_200_000 → "1.2M", 900 → "900". The unit-less core shared with
- * {@link formatCurrencyShort}.
+ * Compact number for chart tiles and legends.
  */
 export function formatCompactNumber(value: number): string {
-  const v = Number(value || 0);
+  const v = parseDealValue(value);
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
-  return v.toFixed(0);
+  return String(v);
+}
+
+/**
+ * Sanitize a raw input string so only whole digits remain (for
+ * controlled `<input>` onChange handlers).
+ */
+export function sanitizeDealValueInput(raw: string): string {
+  if (raw === "") return "";
+  return raw.replace(/\D/g, "");
 }

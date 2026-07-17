@@ -9,6 +9,7 @@ import {
 } from "react"
 import { useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
+import { parseDealValue, sanitizeDealValueInput } from "@/lib/currency"
 import { toast } from "sonner"
 import {
   ArrowLeft,
@@ -1386,9 +1387,14 @@ function StepEditor({
           </FieldBlock>
           <FieldBlock label={t("config.valueLabel")}>
             <Input
-              type="number"
-              value={(cfg.value as number) ?? 0}
-              onChange={(e) => set({ value: Number(e.target.value) })}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={cfg.value != null ? String(Math.round(Number(cfg.value) || 0)) : ""}
+              onChange={(e) =>
+                set({ value: parseDealValue(sanitizeDealValueInput(e.target.value)) })
+              }
+              placeholder="0"
               className="bg-muted text-foreground"
             />
           </FieldBlock>

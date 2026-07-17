@@ -36,13 +36,13 @@ import { useTranslations } from "next-intl";
 // agent+. The two CTAs gate on different `useCan` capabilities,
 // not on different copy.
 
-// Spec-defined seed — name and color per the product spec.
-const SPEC_DEFAULT_STAGES = [
-  { name: "New Lead", color: "#3b82f6", position: 0 }, // blue
-  { name: "Qualified", color: "#eab308", position: 1 }, // yellow
-  { name: "Proposal Sent", color: "#f97316", position: 2 }, // orange
-  { name: "Negotiation", color: "#8b5cf6", position: 3 }, // purple
-  { name: "Won", color: "#22c55e", position: 4 }, // green
+// Spec-defined seed — colors/positions per the product spec; names come from i18n.
+const DEFAULT_STAGE_SPECS = [
+  { key: "newLead" as const, color: "#3b82f6", position: 0 },
+  { key: "qualified" as const, color: "#eab308", position: 1 },
+  { key: "proposalSent" as const, color: "#f97316", position: 2 },
+  { key: "negotiation" as const, color: "#8b5cf6", position: 3 },
+  { key: "won" as const, color: "#22c55e", position: 4 },
 ];
 
 export default function PipelinesPage() {
@@ -120,7 +120,11 @@ export default function PipelinesPage() {
 
     const { data: pipeline, error } = await supabase
       .from("pipelines")
-      .insert({ user_id: user.id, account_id: accountId, name: "Sales Pipeline" })
+      .insert({
+        user_id: user.id,
+        account_id: accountId,
+        name: t("defaultPipelineName"),
+      })
       .select()
       .single();
 
@@ -129,16 +133,16 @@ export default function PipelinesPage() {
       return null;
     }
 
-    const stagesPayload = SPEC_DEFAULT_STAGES.map((s) => ({
+    const stagesPayload = DEFAULT_STAGE_SPECS.map((s) => ({
       pipeline_id: pipeline.id,
-      name: s.name,
+      name: t(`defaultStages.${s.key}`),
       color: s.color,
       position: s.position,
     }));
     await supabase.from("pipeline_stages").insert(stagesPayload);
 
     return pipeline as Pipeline;
-  }, [supabase, accountId]);
+  }, [supabase, accountId, t]);
 
   // Initial load + seed-if-empty
   useEffect(() => {
@@ -279,9 +283,9 @@ export default function PipelinesPage() {
       return;
     }
 
-    const stagesPayload = SPEC_DEFAULT_STAGES.map((s) => ({
+    const stagesPayload = DEFAULT_STAGE_SPECS.map((s) => ({
       pipeline_id: pipeline.id,
-      name: s.name,
+      name: t(`defaultStages.${s.key}`),
       color: s.color,
       position: s.position,
     }));

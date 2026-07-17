@@ -16,6 +16,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { MessageSquare, UsersRound } from "lucide-react";
+import { isSafeRedirectPath } from "@/lib/auth/safe-redirect";
 
 // `useSearchParams` opts the component out of static prerendering
 // unless it sits under a Suspense boundary. We split the form into
@@ -36,6 +37,7 @@ function LoginPageInner() {
   // account. After a successful sign-in we send them to the join
   // page to accept rather than to /dashboard.
   const inviteToken = searchParams.get("invite");
+  const redirectTo = searchParams.get("redirect");
   const t = useTranslations("LoginPage");
 
   const [email, setEmail] = useState("");
@@ -63,6 +65,8 @@ function LoginPageInner() {
 
     if (inviteToken) {
       router.push(`/join/${encodeURIComponent(inviteToken)}`);
+    } else if (redirectTo && isSafeRedirectPath(redirectTo)) {
+      router.push(redirectTo);
     } else {
       router.push("/dashboard");
     }
