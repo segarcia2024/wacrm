@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandLogo } from "@/components/brand-logo";
 import { Separator } from "@/components/ui/separator";
 
 export function MarketingFooter() {
@@ -9,8 +10,14 @@ export function MarketingFooter() {
       <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <p className="font-semibold">REVIO</p>
-            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+            <Link href="/" aria-label="REVIO — inicio" className="inline-flex">
+              <BrandLogo
+                width={160}
+                height={50}
+                className="h-10 w-auto"
+              />
+            </Link>
+            <p className="mt-3 max-w-sm text-sm text-muted-foreground">
               CRM automotriz para concesionarios que venden por WhatsApp y
               necesitan un pipeline claro.
             </p>

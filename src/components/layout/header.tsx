@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { BrandLogo } from "@/components/brand-logo";
 import { ModeToggle } from "@/components/layout/mode-toggle";
 
 const pageTitles: Record<string, string> = {
@@ -68,6 +69,20 @@ export function Header({ onOpenSidebar }: HeaderProps) {
         >
           <Menu className="h-5 w-5" />
         </button>
+        {/* Brand mark on mobile — the desktop sidebar already carries the logo. */}
+        <Link
+          href="/dashboard"
+          className="shrink-0 lg:hidden"
+          aria-label="REVIO"
+        >
+          <BrandLogo
+            variant="icon"
+            priority
+            width={28}
+            height={28}
+            className="size-7"
+          />
+        </Link>
         <h1 className="truncate text-base font-semibold text-foreground sm:text-lg">
           {t(titleKey as string)}
         </h1>

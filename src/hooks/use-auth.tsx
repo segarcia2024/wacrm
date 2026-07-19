@@ -110,16 +110,23 @@ const AuthContext = createContext<AuthContextValue | null>(null);
  * Makes ONE getSession() call for the whole tree instead of one per
  * component, avoiding internal lock contention in the Supabase client.
  */
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+export function AuthProvider({
+  children,
+  initialUser = null,
+}: {
+  children: ReactNode;
+  /** Usuario validado en el servidor (layout del dashboard). */
+  initialUser?: User | null;
+}) {
+  const [user, setUser] = useState<User | null>(initialUser);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [account, setAccount] = useState<AccountSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialUser);
   // Tracked separately from `loading`. The session settles fast (one
   // local cookie read); the profile fetch crosses the network and
   // settles later. Callers that gate on `profile.*` need to know which
   // window they're in — see the type doc above.
-  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(Boolean(initialUser));
 
   // Tracks the user ID we've successfully initiated/completed fetching
   // a profile for. This prevents redundant re-fetches and toggling
@@ -238,27 +245,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const init = async () => {
       try {
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession();
+        if (initialUser) {
+          if (!mounted) return;
+          // Perfil en segundo plano: el layout ya validó la sesión en servidor.
+          void fetchProfile(initialUser.id);
+          return;
+        }
 
-        if (error) console.error("[AuthProvider] getSession error:", error.message);
+        const {
+          data: { user: currentUser },
+          error,
+        } = await supabase.auth.getUser();
+
+        if (error) {
+          console.error("[AuthProvider] getUser error:", error.message);
+          if (
+            error.code === "refresh_token_not_found" ||
+            error.code === "invalid_refresh_token"
+          ) {
+            await supabase.auth.signOut({ scope: "local" });
+          }
+        }
 
         if (!mounted) return;
-        const currentUser = session?.user ?? null;
-        setUser(currentUser);
+        setUser(currentUser ?? null);
 
         if (currentUser) {
-          // Don't block session loading on profile fetch — chrome
-          // (header, sidebar) can render from the user object alone,
-          // profile enriches async. Callers that need to branch on
-          // profile data gate on `profileLoading` instead.
           fetchProfile(currentUser.id);
         } else {
-          // No user → no profile to load. Flip profileLoading off so
-          // pages that gate on it don't wait forever on the logged-out
-          // path (the route guard or redirect should fire instead).
           setProfileLoading(false);
         }
       } catch (err) {
@@ -297,7 +311,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(safetyTimer);
       subscription.unsubscribe();
     };
-  }, [fetchProfile]);
+  }, [fetchProfile, initialUser]);
 
   const signOut = useCallback(async () => {
     const supabase = createClient();

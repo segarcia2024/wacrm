@@ -26,10 +26,10 @@ import {
  *   • `mode`  — light / dark (`data-mode` on <html>)
  * The two are independent, so any accent renders in either mode.
  *
- * The boot script in `src/app/layout.tsx` has already applied both
- * `data-theme` and `data-mode` before React hydrates, so by the time
- * this Provider mounts the page is already painted correctly. We just
- * read what's there and keep it in sync going forward.
+ * The boot script in `src/app/layout.tsx` applies `data-theme` and
+ * `data-mode` before first paint. State bootstraps to the same
+ * defaults the server renders, then syncs from the DOM in an effect
+ * so hydration never diverges (ModeToggle / sonner depend on this).
  *
  * Persistence is localStorage only (device-scoped). A future
  * follow-up could mirror to `profiles.preferences` for cross-device
@@ -77,8 +77,16 @@ function readInitialMode(): Mode {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeId>(readInitialTheme);
-  const [mode, setModeState] = useState<Mode>(readInitialMode);
+  // Must match the server render (DEFAULT_*). Reading localStorage or
+  // data-* in the useState initializer runs on the client's first
+  // render and causes hydration mismatches in ModeToggle.
+  const [theme, setThemeState] = useState<ThemeId>(DEFAULT_THEME);
+  const [mode, setModeState] = useState<Mode>(DEFAULT_MODE);
+
+  useEffect(() => {
+    setThemeState(readInitialTheme());
+    setModeState(readInitialMode());
+  }, []);
 
   const setTheme = useCallback((next: ThemeId) => {
     setThemeState(next);

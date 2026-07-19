@@ -73,6 +73,12 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: appRoot,
   },
+  experimental: {
+    // Dev was wedging on "○ Compiling /notifications ..." while Turbopack
+    // compacted a multi-GB persistent FS cache (see terminal: compaction
+    // 87s+ with .next/dev/cache ~1.9GB). Disable until Next hardens pruning.
+    turbopackFileSystemCacheForDev: false,
+  },
 
   /**
    * Cache-Control policy.

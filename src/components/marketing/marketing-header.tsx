@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandLogo } from "@/components/brand-logo";
 import { buttonVariants } from "@/components/ui/button";
 
 const navLinks = [
@@ -12,12 +13,15 @@ export function MarketingHeader() {
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:h-16 sm:px-6 lg:px-8">
         <Link
           href="/"
-          className="flex items-center gap-2 font-semibold tracking-tight"
+          className="flex items-center"
+          aria-label="REVIO — inicio"
         >
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary/15 text-sm font-bold text-primary">
-            R
-          </span>
-          <span className="text-base sm:text-lg">REVIO</span>
+          <BrandLogo
+            priority
+            width={176}
+            height={56}
+            className="h-10 w-auto sm:h-11"
+          />
         </Link>
 
         <nav

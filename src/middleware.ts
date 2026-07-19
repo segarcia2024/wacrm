@@ -2,6 +2,11 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 import { isSafeRedirectPath } from '@/lib/auth/safe-redirect'
+import {
+  clearSupabaseAuthCookies,
+  hasSupabaseAuthCookies,
+  isStaleRefreshTokenError,
+} from '@/lib/supabase/auth-cookies'
 
 function resolvePostAuthRedirect(request: NextRequest): string {
   const redirectTo = request.nextUrl.searchParams.get('redirect')
@@ -33,7 +38,24 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const requestCookies = request.cookies.getAll()
+  let user = null
+
+  // Skip Auth API calls when there is no session cookie — avoids noise on
+  // first visits and after cookies have been cleared.
+  if (hasSupabaseAuthCookies(requestCookies)) {
+    const {
+      data: { user: resolvedUser },
+      error: authError,
+    } = await supabase.auth.getUser()
+
+    user = resolvedUser
+
+    if (authError && !user && isStaleRefreshTokenError(authError)) {
+      clearSupabaseAuthCookies(request, supabaseResponse)
+      user = null
+    }
+  }
 
   // getUser() transparently refreshes an expired access token, which
   // ROTATES the refresh token and writes the new cookies onto
@@ -50,6 +72,18 @@ export async function middleware(request: NextRequest) {
       response.cookies.set(cookie)
     })
     return response
+  }
+
+  const isServerAction =
+    request.method === 'POST' &&
+    (request.headers.has('next-action') || request.headers.has('Next-Action'))
+
+  const isAuthLoginPost =
+    request.method === 'POST' && request.nextUrl.pathname === '/api/auth/login'
+
+  // Never redirect Server Actions or the login API — redirects break the POST.
+  if (isServerAction || isAuthLoginPost) {
+    return supabaseResponse
   }
 
   // Landing page — signed-in users go straight to the CRM.
