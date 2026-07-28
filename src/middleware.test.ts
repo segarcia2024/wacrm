@@ -29,7 +29,7 @@ vi.mock("@supabase/ssr", () => ({
       // pushes the new cookies through setAll() before resolving.
       getUser: async () => {
         if (refreshedCookies.length) opts.cookies.setAll(refreshedCookies);
-        return { data: { user: mockUser } };
+        return { data: { user: mockUser }, error: null };
       },
     },
   }),
@@ -53,24 +53,32 @@ const ROTATED = {
   options: { path: "/", httpOnly: true },
 };
 
+/** Middleware only calls getUser() when an auth cookie is present. */
+function requestWithAuthCookie(url: string): NextRequest {
+  return new NextRequest(url, {
+    headers: { cookie: `${ROTATED.name}=stale-refresh-token` },
+  });
+}
+
 describe("middleware — refreshed auth cookies survive redirects", () => {
   it("redirects a signed-in user from / to /dashboard", async () => {
     mockUser = { id: "user-1" };
     refreshedCookies = [ROTATED];
 
-    const res = await middleware(new NextRequest("https://app.test/"));
+    const res = await middleware(requestWithAuthCookie("https://app.test/"));
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/dashboard");
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
   });
 
-  it("allows unauthenticated visitors on / (landing page)", async () => {
+  it("redirects unauthenticated visitors from / to /login", async () => {
     mockUser = null;
 
     const res = await middleware(new NextRequest("https://app.test/"));
 
-    expect(res.headers.get("location")).toBeNull();
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
   });
 
   it("carries the rotated token when redirecting a signed-in user off /login", async () => {
@@ -78,7 +86,7 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     refreshedCookies = [ROTATED];
 
     const res = await middleware(
-      new NextRequest("https://app.test/login"),
+      requestWithAuthCookie("https://app.test/login"),
     );
 
     // Redirect to /dashboard…
@@ -97,7 +105,7 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     refreshedCookies = [{ ...ROTATED, value: "cleared" }];
 
     const res = await middleware(
-      new NextRequest("https://app.test/dashboard"),
+      requestWithAuthCookie("https://app.test/dashboard"),
     );
 
     expect(res.status).toBe(307);
@@ -110,7 +118,7 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     refreshedCookies = [ROTATED];
 
     const res = await middleware(
-      new NextRequest("https://app.test/login?invite=abc123"),
+      requestWithAuthCookie("https://app.test/login?invite=abc123"),
     );
 
     expect(res.headers.get("location")).toContain("/join/abc123");
@@ -122,7 +130,7 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     refreshedCookies = [ROTATED];
 
     const res = await middleware(
-      new NextRequest("https://app.test/dashboard"),
+      requestWithAuthCookie("https://app.test/dashboard"),
     );
 
     // No redirect — the normal NextResponse.next() already carries cookies.

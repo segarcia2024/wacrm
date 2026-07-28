@@ -86,10 +86,11 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Landing page — signed-in users go straight to the CRM.
-  if (user && request.nextUrl.pathname === '/') {
+  // Root — CRM-only MVP (no public landing). Signed-in users go to the
+  // dashboard; everyone else lands on login.
+  if (request.nextUrl.pathname === '/') {
     const url = request.nextUrl.clone()
-    url.pathname = '/dashboard'
+    url.pathname = user ? '/dashboard' : '/login'
     url.search = ''
     return withRefreshedCookies(NextResponse.redirect(url))
   }
@@ -100,6 +101,10 @@ export async function middleware(request: NextRequest) {
   // they can accept the invitation in one click. Without this,
   // a forwarded invite link to someone who's already signed in
   // would silently drop them on /dashboard.
+  //
+  // `/reset-password` is intentionally excluded: after the email
+  // recovery link, the user HAS a session (recovery) and must stay
+  // on that page to set a new password.
   if (user && (
     request.nextUrl.pathname === '/login' ||
     request.nextUrl.pathname === '/signup' ||
