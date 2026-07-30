@@ -57,6 +57,11 @@ export interface Account {
   name: string;
   /** auth.users.id of the immutable owner. */
   owner_user_id: string;
+  /**
+   * Last agent who received a round-robin assignment. Advanced
+   * atomically by `claim_next_round_robin_agent` (migration 041).
+   */
+  round_robin_cursor_user_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -187,7 +192,9 @@ export interface Conversation {
 // Notifications (migration 027)
 // ============================================================
 
-export type NotificationType = 'conversation_assigned';
+export type NotificationType =
+  | 'conversation_assigned'
+  | 'appointment_reminder';
 
 export interface Notification {
   id: string;
@@ -352,6 +359,44 @@ export interface PipelineStage {
 }
 
 export type DealStatus = 'open' | 'won' | 'lost';
+
+export type AppointmentType =
+  | 'showroom'
+  | 'test_drive'
+  | 'call'
+  | 'delivery'
+  | 'other';
+
+export type AppointmentStatus =
+  | 'scheduled'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
+
+export interface Appointment {
+  id: string;
+  account_id: string;
+  user_id: string;
+  contact_id: string;
+  conversation_id?: string | null;
+  deal_id?: string | null;
+  /** profiles.id — same convention as deals.assigned_to */
+  assigned_to?: string | null;
+  type: AppointmentType;
+  starts_at: string;
+  duration_minutes: number;
+  location?: string | null;
+  notes?: string | null;
+  status: AppointmentStatus;
+  reminder_enabled: boolean;
+  client_reminder_sent_at?: string | null;
+  agent_reminder_sent_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+  contact?: Contact;
+  deal?: Deal;
+  assignee?: Profile;
+}
 
 export interface Deal {
   id: string;
