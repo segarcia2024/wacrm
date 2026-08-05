@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import type { Deal, PipelineStage } from "@/types";
-import { Calendar, Check, X } from "lucide-react";
+import { Calendar, Check, MessageSquare, X } from "lucide-react";
 import { formatCurrency, CURRENCY_LOCALE } from "@/lib/currency";
 import { useTranslations } from "next-intl";
 
@@ -92,16 +93,27 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
         )}
       </div>
 
-      {assigneeLabel && (
-        <div className="mt-2 flex items-center justify-end">
+      <div className="mt-2 flex items-center justify-end gap-1.5">
+        {deal.conversation_id && !isOverlay ? (
+          <Link
+            href={`/inbox?c=${deal.conversation_id}`}
+            onClick={(e) => e.stopPropagation()}
+            title={t("openConversation")}
+            aria-label={t("openConversation")}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+          </Link>
+        ) : null}
+        {assigneeLabel ? (
           <span
             title={assigneeLabel}
             className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
           >
             {initials(assigneeLabel)}
           </span>
-        </div>
-      )}
+        ) : null}
+      </div>
     </button>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Pipeline, PipelineStage, Deal } from "@/types";
 import { PipelineBoard } from "@/components/pipelines/pipeline-board";
@@ -24,12 +24,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { GitBranch, Plus, ChevronDown, Settings } from "lucide-react";
+import { GitBranch, Plus, ChevronDown, Search, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { useCan } from "@/hooks/use-can";
 import { useAuth } from "@/hooks/use-auth";
 import { GatedButton } from "@/components/ui/gated-button";
 import { useTranslations } from "next-intl";
+import { isDealInAgentScope } from "@/lib/deals/visibility";
+import { matchesVehicleSearch } from "@/lib/vehicles/search";
 
 // Pipeline creation is admin-class (settings-tier write under
 // the new RLS); deal creation is operational and only requires
@@ -50,12 +52,13 @@ export default function PipelinesPage() {
   const supabase = createClient();
   const canEditSettings = useCan("edit-settings");
   const canCreateDeals = useCan("send-messages");
-  const { accountId } = useAuth();
+  const { accountId, profile, canViewAllDeals } = useAuth();
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
 
   // Dialog / sheet state
@@ -99,14 +102,45 @@ export default function PipelinesPage() {
 
   const loadDeals = useCallback(
     async (pipelineId: string) => {
-      const { data } = await supabase
+      // RLS (`can_view_deal`) is the real boundary; this client filter
+      // mirrors it so analytics/board state stay consistent if a row
+      // somehow lands in local state outside agent scope.
+      let query = supabase
         .from("deals")
-        .select("*, contact:contacts(*), assignee:profiles!deals_assigned_to_fkey(*)")
+        .select(
+          "*, contact:contacts(*), assignee:profiles!deals_assigned_to_fkey(*), vehicle:vehicles(id, plate, make, model, year, status)",
+        )
         .eq("pipeline_id", pipelineId)
         .order("created_at", { ascending: false });
-      return (data ?? []) as Deal[];
+
+      if (!canViewAllDeals && profile?.id) {
+        query = query.or(`assigned_to.is.null,assigned_to.eq.${profile.id}`);
+      }
+
+      let { data, error } = await query;
+      if (error) {
+        // Pre-046: vehicles join unavailable
+        let legacy = supabase
+          .from("deals")
+          .select(
+            "*, contact:contacts(*), assignee:profiles!deals_assigned_to_fkey(*)",
+          )
+          .eq("pipeline_id", pipelineId)
+          .order("created_at", { ascending: false });
+        if (!canViewAllDeals && profile?.id) {
+          legacy = legacy.or(
+            `assigned_to.is.null,assigned_to.eq.${profile.id}`,
+          );
+        }
+        const again = await legacy;
+        data = again.data;
+      }
+
+      const rows = (data ?? []) as Deal[];
+      if (canViewAllDeals || !profile?.id) return rows;
+      return rows.filter((d) => isDealInAgentScope(d, profile.id));
     },
-    [supabase],
+    [supabase, canViewAllDeals, profile?.id],
   );
 
   const seedDefaultPipeline = useCallback(async (): Promise<Pipeline | null> => {
@@ -301,6 +335,30 @@ export default function PipelinesPage() {
 
   const selectedPipeline = pipelines.find((p) => p.id === selectedPipelineId);
 
+  const filteredDeals = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return deals;
+    return deals.filter((d) => {
+      const title = d.title?.toLowerCase() ?? "";
+      const name = d.contact?.name?.toLowerCase() ?? "";
+      const phone = d.contact?.phone?.toLowerCase() ?? "";
+      return (
+        title.includes(q) ||
+        name.includes(q) ||
+        phone.includes(q) ||
+        matchesVehicleSearch(
+          {
+            plate: d.vehicle?.plate,
+            make: d.vehicle?.make,
+            model: d.vehicle?.model,
+            title: d.title,
+          },
+          q,
+        )
+      );
+    });
+  }, [deals, search]);
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -394,6 +452,18 @@ export default function PipelinesPage() {
         </div>
       </div>
 
+      {pipelines.length > 0 ? (
+        <div className="relative max-w-md">
+          <Search className="absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("searchPlaceholder")}
+            className="border-border bg-card pl-9"
+          />
+        </div>
+      ) : null}
+
       {/* Board */}
       {pipelines.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20">
@@ -416,10 +486,10 @@ export default function PipelinesPage() {
         </div>
       ) : (
         <>
-          <PipelineAnalytics stages={stages} deals={deals} />
+          <PipelineAnalytics stages={stages} deals={filteredDeals} />
           <PipelineBoard
             stages={stages}
-            deals={deals}
+            deals={filteredDeals}
             onDealMoved={handleDealMoved}
             onAddDeal={handleAddDeal}
             onEditDeal={handleEditDeal}

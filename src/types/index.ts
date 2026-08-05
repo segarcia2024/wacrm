@@ -162,6 +162,13 @@ export interface ContactNote {
 
 export type ConversationStatus = 'open' | 'pending' | 'closed';
 
+/** Lightweight vehicle fields attached for Inbox search (plate/make/model). */
+export interface ConversationVehicleHit {
+  plate: string;
+  make: string;
+  model: string;
+}
+
 export interface Conversation {
   id: string;
   user_id: string;
@@ -174,6 +181,11 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   contact?: Contact;
+  /**
+   * Open-deal vehicles for this contact (hydrated in Inbox select) so
+   * the conversation list can search by plate / make / model.
+   */
+  linkedVehicles?: ConversationVehicleHit[];
   /**
    * AI auto-reply state for this thread (migration 029 + 033):
    *  - `ai_autoreply_disabled` — the bot is paused here (a human took
@@ -398,6 +410,8 @@ export interface Appointment {
   assignee?: Profile;
 }
 
+export type VehicleStatus = "available" | "reserved" | "sold";
+
 export interface Deal {
   id: string;
   user_id: string;
@@ -410,6 +424,8 @@ export interface Deal {
   contact_id: string | null;
   conversation_id?: string;
   assigned_to?: string;
+  /** Optional link to inventory vehicle (migration 046). */
+  vehicle_id?: string | null;
   title: string;
   /** Deal value in whole Colombian Pesos (COP). */
   value: number;
@@ -423,6 +439,42 @@ export interface Deal {
   contact?: Contact;
   stage?: PipelineStage;
   assignee?: Profile;
+  vehicle?: Vehicle;
+}
+
+export interface VehicleOpenDealSummary {
+  id: string;
+  status?: DealStatus | null;
+  conversation_id?: string | null;
+  stage?: { name: string } | null;
+}
+
+export interface Vehicle {
+  id: string;
+  account_id: string;
+  user_id: string;
+  /** Normalized uppercase plate (no spaces/dashes). */
+  plate: string;
+  make: string;
+  model: string;
+  year: number;
+  /** List price in whole Colombian Pesos (COP). */
+  price: number;
+  mileage?: number | null;
+  status: VehicleStatus;
+  notes?: string | null;
+  sold_at?: string | null;
+  /** profiles.id — seller when status = sold */
+  sold_by?: string | null;
+  buyer_contact_id?: string | null;
+  sold_deal_id?: string | null;
+  created_at: string;
+  updated_at?: string;
+  buyer?: Contact;
+  seller?: Profile;
+  sold_deal?: Deal;
+  /** Hydrated on inventory list for open-deal / stage summary. */
+  deals?: VehicleOpenDealSummary[];
 }
 
 export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';

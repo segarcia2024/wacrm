@@ -8,12 +8,9 @@ import {
   parseDealValue,
   sanitizeDealValueInput,
 } from "@/lib/currency";
-import {
-  buildVehicleDealTitle,
-  isValidVehicleYear,
-  parseVehicleDealTitle,
-} from "@/lib/deals/vehicle-title";
-import type { Deal, Pipeline, PipelineStage } from "@/types";
+import { titleFromVehicle } from "@/lib/vehicles/deal-vehicle";
+import type { Deal, Pipeline, PipelineStage, Vehicle } from "@/types";
+import { VehiclePicker } from "@/components/inventory/vehicle-picker";
 import {
   Sheet,
   SheetContent,
@@ -51,9 +48,7 @@ export function InboxDealForm({
   const { accountId } = useAuth();
   const isEdit = !!deal;
 
-  const [make, setMake] = useState("");
-  const [model, setModel] = useState("");
-  const [year, setYear] = useState("");
+  const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [value, setValue] = useState("");
   const [notes, setNotes] = useState("");
   const [pipelineId, setPipelineId] = useState("");
@@ -63,34 +58,22 @@ export function InboxDealForm({
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(false);
+  const [loadingVehicle, setLoadingVehicle] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const titlePreview = buildVehicleDealTitle({ make, model, year });
+  const titlePreview = vehicle ? titleFromVehicle(vehicle) : "";
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!open) return;
     if (deal) {
-      const parsed = parseVehicleDealTitle(deal.title);
-      if (parsed) {
-        setMake(parsed.make);
-        setModel(parsed.model);
-        setYear(String(parsed.year));
-      } else {
-        // Fallback: keep the whole title editable as model; agent can fix fields.
-        setMake("");
-        setModel(deal.title);
-        setYear("");
-      }
       setValue(deal.value ? String(Math.round(deal.value)) : "");
       setNotes(deal.notes ?? "");
       setPipelineId(deal.pipeline_id);
       setPreferredStageId(deal.stage_id);
       setStageId(deal.stage_id);
     } else {
-      setMake("");
-      setModel("");
-      setYear("");
+      setVehicle(null);
       setValue("");
       setNotes("");
       setPipelineId("");
@@ -100,6 +83,36 @@ export function InboxDealForm({
     }
   }, [open, deal]);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (!open || !deal?.vehicle_id) {
+      if (open && deal && !deal.vehicle_id) {
+        // Legacy deal without inventory link — clear selection.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setVehicle(null);
+      }
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setLoadingVehicle(true);
+      const { data, error } = await supabase
+        .from("vehicles")
+        .select("*")
+        .eq("id", deal.vehicle_id!)
+        .maybeSingle();
+      if (cancelled) return;
+      setLoadingVehicle(false);
+      if (error || !data) {
+        setVehicle(null);
+        return;
+      }
+      setVehicle(data as Vehicle);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, deal, supabase]);
 
   useEffect(() => {
     if (!open) return;
@@ -165,22 +178,25 @@ export function InboxDealForm({
     return () => {
       cancelled = true;
     };
-    // stageId omitted on purpose — only re-run when pipeline/open changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pipelineId, preferredStageId, supabase, t]);
 
+  function handleVehicleChange(next: Vehicle | null) {
+    setVehicle(next);
+    if (next) {
+      // Prefill price from inventory; agent can still override.
+      setValue(next.price ? String(Math.round(next.price)) : "");
+    }
+  }
+
   async function handleSave() {
-    if (!make.trim() || !model.trim() || !year.trim() || !stageId || !pipelineId) {
-      toast.error(t("toastRequired"));
+    if (!vehicle || !stageId || !pipelineId) {
+      toast.error(t("toastRequiredVehicle"));
       return;
     }
-    if (!isValidVehicleYear(year)) {
-      toast.error(t("toastInvalidYear"));
-      return;
-    }
-    const title = buildVehicleDealTitle({ make, model, year });
+    const title = titleFromVehicle(vehicle);
     if (!title) {
-      toast.error(t("toastRequired"));
+      toast.error(t("toastRequiredVehicle"));
       return;
     }
 
@@ -188,6 +204,7 @@ export function InboxDealForm({
 
     const basePayload = {
       title,
+      vehicle_id: vehicle.id,
       value: parseDealValue(value),
       currency: DEFAULT_CURRENCY,
       contact_id: contactId,
@@ -254,13 +271,12 @@ export function InboxDealForm({
   }
 
   const canSubmit =
-    !!make.trim() &&
-    !!model.trim() &&
-    !!year.trim() &&
+    !!vehicle &&
     !!pipelineId &&
     !!stageId &&
     !saving &&
-    !loadingMeta;
+    !loadingMeta &&
+    !loadingVehicle;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -276,41 +292,18 @@ export function InboxDealForm({
           </SheetHeader>
 
           <div className="flex-1 space-y-4 overflow-y-auto p-4">
-            <div className="grid gap-2">
-              <Label className="text-muted-foreground">{t("make")}</Label>
-              <Input
-                value={make}
-                onChange={(e) => setMake(e.target.value)}
-                placeholder={t("makePlaceholder")}
-                className="border-border bg-muted text-foreground"
+            {loadingVehicle ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("loadingVehicle")}
+              </div>
+            ) : (
+              <VehiclePicker
+                value={vehicle}
+                onChange={handleVehicleChange}
+                includeVehicleId={deal?.vehicle_id}
               />
-            </div>
-
-            <div className="grid gap-2">
-              <Label className="text-muted-foreground">{t("model")}</Label>
-              <Input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={t("modelPlaceholder")}
-                className="border-border bg-muted text-foreground"
-              />
-            </div>
-
-            <div className="grid gap-2">
-              <Label className="text-muted-foreground">{t("year")}</Label>
-              <Input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={4}
-                value={year}
-                onChange={(e) =>
-                  setYear(e.target.value.replace(/\D/g, "").slice(0, 4))
-                }
-                placeholder={t("yearPlaceholder")}
-                className="border-border bg-muted text-foreground"
-              />
-            </div>
+            )}
 
             {titlePreview ? (
               <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">

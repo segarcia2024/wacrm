@@ -4,14 +4,17 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
+  CONVERSATION_SELECT_LEGACY,
   matchesContactFilters,
   normalizeConversations,
 } from "@/lib/inbox/conversations";
+import { matchesVehicleSearch } from "@/lib/vehicles/search";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus, Tag } from "@/types";
 import { Search, ChevronDown, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslations } from "next-intl";
+import { useAuth } from "@/hooks/use-auth";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -45,6 +48,7 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
 
 
 type InboxFilter = ConversationStatus | "all" | "unread";
+type AssigneeFilter = "all" | "mine" | "unassigned";
 
 export function ConversationList({
   activeConversationId,
@@ -54,7 +58,8 @@ export function ConversationList({
   resyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
-  
+  const { user } = useAuth();
+
   const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
     { label: t("filterAll"), value: "all" },
     { label: t("filterUnread"), value: "unread" },
@@ -63,8 +68,18 @@ export function ConversationList({
     { label: t("filterClosed"), value: "closed" },
   ], [t]);
 
+  const ASSIGNEE_OPTIONS: { label: string; value: AssigneeFilter }[] = useMemo(
+    () => [
+      { label: t("filterAssigneeAll"), value: "all" },
+      { label: t("filterAssigneeMine"), value: "mine" },
+      { label: t("filterAssigneeUnassigned"), value: "unassigned" },
+    ],
+    [t],
+  );
+
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
   const [loading, setLoading] = useState(true);
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
@@ -95,10 +110,20 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from("conversations")
         .select(CONVERSATION_SELECT)
         .order("last_message_at", { ascending: false });
+
+      // Inventory join may fail before migration 046 — retry without vehicles.
+      if (error) {
+        const fallback = await supabase
+          .from("conversations")
+          .select(CONVERSATION_SELECT_LEGACY)
+          .order("last_message_at", { ascending: false });
+        data = fallback.data;
+        error = fallback.error;
+      }
 
       if (cancelled) return;
 
@@ -167,6 +192,12 @@ export function ConversationList({
       result = result.filter((c) => c.status === filter);
     }
 
+    if (assigneeFilter === "mine" && user?.id) {
+      result = result.filter((c) => c.assigned_agent_id === user.id);
+    } else if (assigneeFilter === "unassigned") {
+      result = result.filter((c) => !c.assigned_agent_id);
+    }
+
     // Contact-based filters (tags via OR logic, exact company match).
     if (selectedTagIds.length > 0 || selectedCompany !== null) {
       result = result.filter((c) =>
@@ -183,12 +214,25 @@ export function ConversationList({
         const name = c.contact?.name?.toLowerCase() ?? "";
         const phone = c.contact?.phone?.toLowerCase() ?? "";
         const lastMsg = c.last_message_text?.toLowerCase() ?? "";
-        return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
+        return (
+          name.includes(q) ||
+          phone.includes(q) ||
+          lastMsg.includes(q) ||
+          matchesVehicleSearch(c.linkedVehicles, q)
+        );
       });
     }
 
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany]);
+  }, [
+    conversations,
+    filter,
+    assigneeFilter,
+    search,
+    selectedTagIds,
+    selectedCompany,
+    user?.id,
+  ]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -218,12 +262,15 @@ export function ConversationList({
   );
 
   const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const activeAssigneeFilter = ASSIGNEE_OPTIONS.find(
+    (o) => o.value === assigneeFilter,
+  );
 
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
     // the single pane showing; fixed 320px on desktop where it shares the
     // row with the thread + contact sidebar.
-    <div className="flex h-full w-full flex-col border-r border-border bg-card lg:w-80">
+    <div className="flex h-full min-h-0 w-full flex-col border-r border-border bg-card pb-[env(safe-area-inset-bottom,0px)] lg:w-80 lg:pb-0">
       {/* Search + Filter */}
       <div className="space-y-2 border-b border-border p-3">
         <div className="relative">
@@ -255,6 +302,39 @@ export function ConversationList({
                     filter === opt.value
                       ? "text-primary"
                       : "text-popover-foreground"
+                  )}
+                >
+                  {opt.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className={cn(
+                "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                assigneeFilter !== "all"
+                  ? "text-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {activeAssigneeFilter?.label ?? t("filterAssigneeAll")}
+              <ChevronDown className="h-3 w-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="border-border bg-popover"
+            >
+              {ASSIGNEE_OPTIONS.map((opt) => (
+                <DropdownMenuItem
+                  key={opt.value}
+                  onClick={() => setAssigneeFilter(opt.value)}
+                  className={cn(
+                    "text-sm",
+                    assigneeFilter === opt.value
+                      ? "text-primary"
+                      : "text-popover-foreground",
                   )}
                 >
                   {opt.label}

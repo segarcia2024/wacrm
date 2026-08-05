@@ -1,19 +1,61 @@
-import type { Conversation, Contact, Tag } from "@/types";
+import type {
+  Conversation,
+  ConversationVehicleHit,
+  Contact,
+  Tag,
+  Vehicle,
+} from "@/types";
 
 /**
  * Conversation select that embeds the contact plus its tags, so the Inbox
  * can filter conversations by contact tag without a second round-trip.
+ * Also embeds contact deals → vehicles for plate/make/model search.
  * `contact_tags(tags(*))` returns the join rows; {@link normalizeConversation}
- * flattens them onto `contact.tags`.
+ * flattens them onto `contact.tags` and `linkedVehicles`.
  */
 export const CONVERSATION_SELECT =
+  "*, contact:contacts(*, contact_tags(tags(*)), deals(id, status, vehicle:vehicles(plate, make, model)))";
+
+/** Fallback when inventory join is unavailable (pre-046 schema). */
+export const CONVERSATION_SELECT_LEGACY =
   "*, contact:contacts(*, contact_tags(tags(*)))";
 
+type RawDealVehicle = Pick<Vehicle, "plate" | "make" | "model"> | null;
+type RawContactDeal = {
+  id: string;
+  status?: string | null;
+  vehicle?: RawDealVehicle;
+};
+
 /** Raw shape returned by {@link CONVERSATION_SELECT} before flattening. */
-type RawContact = Contact & { contact_tags?: { tags: Tag | null }[] };
-type RawConversation = Omit<Conversation, "contact"> & {
+type RawContact = Contact & {
+  contact_tags?: { tags: Tag | null }[];
+  deals?: RawContactDeal[] | null;
+};
+type RawConversation = Omit<Conversation, "contact" | "linkedVehicles"> & {
   contact?: RawContact | null;
 };
+
+function linkedVehiclesFromContactDeals(
+  deals: RawContactDeal[] | null | undefined,
+): ConversationVehicleHit[] {
+  const seen = new Set<string>();
+  const out: ConversationVehicleHit[] = [];
+  for (const d of deals ?? []) {
+    if (d.status && d.status !== "open") continue;
+    const v = d.vehicle;
+    if (!v?.plate && !v?.make && !v?.model) continue;
+    const key = `${v.plate ?? ""}|${v.make ?? ""}|${v.model ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      plate: v.plate ?? "",
+      make: v.make ?? "",
+      model: v.model ?? "",
+    });
+  }
+  return out;
+}
 
 /**
  * Flatten the embedded `contact_tags(tags(*))` join into `contact.tags`.
@@ -24,9 +66,10 @@ export function normalizeConversation(raw: RawConversation): Conversation {
   const rawContact = raw.contact;
   if (!rawContact) return raw as Conversation;
 
-  const { contact_tags, ...contact } = rawContact;
+  const { contact_tags, deals, ...contact } = rawContact;
   return {
     ...raw,
+    linkedVehicles: linkedVehiclesFromContactDeals(deals),
     contact: {
       ...contact,
       tags: (contact_tags ?? [])
@@ -40,6 +83,19 @@ export function normalizeConversations(
   rows: RawConversation[],
 ): Conversation[] {
   return rows.map(normalizeConversation);
+}
+
+/**
+ * Whether an agent/viewer may keep a conversation in local inbox state
+ * (mirrors SQL `can_view_conversation` for non-admin roles).
+ * Admins should not use this gate — they see the full account inbox.
+ */
+export function isConversationInAgentScope(
+  conversation: Pick<Conversation, "assigned_agent_id">,
+  userId: string,
+): boolean {
+  const assignee = conversation.assigned_agent_id ?? null;
+  return assignee === null || assignee === userId;
 }
 
 export interface ContactFilters {

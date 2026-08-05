@@ -6,10 +6,14 @@ import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
+  CONVERSATION_SELECT_LEGACY,
+  isConversationInAgentScope,
   normalizeConversation,
 } from "@/lib/inbox/conversations";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
+import { useAuth } from "@/hooks/use-auth";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useInboxChrome } from "@/hooks/use-inbox-chrome";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
@@ -25,6 +29,8 @@ export default function InboxPage() {
   const t = useTranslations("Inbox.page");
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { user, canViewAllConversations } = useAuth();
+  const { setMobileChatOpen } = useInboxChrome();
   /**
    * `?c=<id>` deep-link support. Used when landing here from the
    * dashboard's recent-conversations list so the right thread opens
@@ -122,11 +128,20 @@ export default function InboxPage() {
     hydratingConvIdsRef.current.add(convId);
     try {
       const supabase = createClient();
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from("conversations")
         .select(CONVERSATION_SELECT)
         .eq("id", convId)
         .maybeSingle();
+      if (error) {
+        const fallback = await supabase
+          .from("conversations")
+          .select(CONVERSATION_SELECT_LEGACY)
+          .eq("id", convId)
+          .maybeSingle();
+        data = fallback.data;
+        error = fallback.error;
+      }
       if (error) {
         // Supabase errors have non-enumerable properties — log fields
         // explicitly so the console message isn't just `{}`.
@@ -272,8 +287,17 @@ export default function InboxPage() {
       old: Partial<Conversation>;
     }) => {
       const conv = event.new;
+      const userId = user?.id;
+      // Agents/viewers: drop local rows that leave their scope when
+      // reassigned (RLS stops future SELECTs; realtime may still deliver
+      // the UPDATE that caused the loss of access).
+      const outOfScope =
+        !canViewAllConversations &&
+        !!userId &&
+        !isConversationInAgentScope(conv, userId);
 
       if (event.eventType === "INSERT") {
+        if (outOfScope) return;
         // Prepend immediately for snappy UX so the new conv shows in the
         // list right away, then hydrate to fill in the `contact` join
         // (realtime payloads never include joins). Skip both if we
@@ -289,6 +313,17 @@ export default function InboxPage() {
       }
 
       if (event.eventType === "UPDATE") {
+        if (outOfScope) {
+          setConversations((prev) => prev.filter((c) => c.id !== conv.id));
+          if (activeConversation?.id === conv.id) {
+            setActiveConversation(null);
+            setActiveContact(null);
+            setMessages([]);
+            setMobileChatOpen(false);
+          }
+          return;
+        }
+
         if (knownConvIdsRef.current.has(conv.id)) {
           // If this UPDATE is for the conv the user is currently viewing,
           // suppress the incoming unread_count — the user is reading it
@@ -323,7 +358,13 @@ export default function InboxPage() {
         }
       }
     },
-    [activeConversation, hydrateConversation]
+    [
+      activeConversation,
+      canViewAllConversations,
+      hydrateConversation,
+      setMobileChatOpen,
+      user?.id,
+    ]
   );
 
   // Subscribe to realtime. The `isConnected` flag below feeds the
@@ -405,7 +446,7 @@ export default function InboxPage() {
         autoSelectedForDeepLinkRef.current = deepLinkConvId;
         // If the deep-linked conversation is already the active one
         // (e.g. because the user clicked it in the list and we
-        // router.replace()'d the URL, which made the ConversationList
+        // router.push/replace()'d the URL, which made the ConversationList
         // refetch and land us back here), do NOT re-apply it. Doing so
         // would setMessages([]) on a thread whose messages have
         // already been loaded by MessageThread — and because
@@ -462,24 +503,33 @@ export default function InboxPage() {
         ),
       );
       // Record the selection on the deep-link ref BEFORE we change the
-      // URL. The router.replace below flips `deepLinkConvId`, which can
-      // in turn cause ConversationList to refetch and eventually call
-      // handleConversationsLoaded again. Without this line, the ref
-      // still points at the previous value, the auto-select block
+      // URL. The router.push/replace below flips `deepLinkConvId`, which
+      // can in turn cause ConversationList to refetch and eventually
+      // call handleConversationsLoaded again. Without this line, the
+      // ref still points at the previous value, the auto-select block
       // sees `ref !== deepLinkConvId`, fires a second time, and
-      // clobbers the messages MessageThread just fetched.
+      // clobbers the messages MessageThread just fetched (#105/#106).
       autoSelectedForDeepLinkRef.current = conv.id;
       // Reflect the selection in the URL so a refresh lands the user
-      // back in the same thread, and so copy-paste links work. Use
-      // replace() to avoid polluting browser history with every click.
-      router.replace(`/inbox?c=${conv.id}`, { scroll: false });
+      // back in the same thread, and so copy-paste links work.
+      // Fase 5: push when opening from the list so the browser Back
+      // button returns to the list; replace when switching threads so
+      // we don't stack every click (desktop + mobile).
+      const url = `/inbox?c=${conv.id}`;
+      if (activeConversation) {
+        router.replace(url, { scroll: false });
+      } else {
+        router.push(url, { scroll: false });
+      }
     },
-    [activeConversation?.id, router]
+    [activeConversation, router]
   );
 
   // Mobile "back" — deselect the conversation so the list pane comes
   // back. Also clears the ?c= param so a refresh lands on the list
   // instead of re-opening the thread the user just backed out of.
+  // Use replace (not history.back) so an in-app back after a deep-link
+  // landing stays on /inbox instead of leaving the CRM.
   const handleCloseConversation = useCallback(() => {
     setActiveConversation(null);
     setActiveContact(null);
@@ -489,6 +539,24 @@ export default function InboxPage() {
     autoSelectedForDeepLinkRef.current = null;
     router.replace("/inbox", { scroll: false });
   }, [router]);
+
+  // Fase 5: when browser Back pops a pushed `/inbox?c=` entry and the
+  // URL loses `?c=`, mirror the in-app close WITHOUT touching the
+  // router (URL is already correct). Skip the first effect run so a
+  // cold load of `/inbox` doesn't race selection. Only fire on
+  // string→null transitions (not null→null).
+  const prevDeepLinkRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevDeepLinkRef.current;
+    prevDeepLinkRef.current = deepLinkConvId;
+    if (prev === undefined) return;
+    if (prev && !deepLinkConvId) {
+      setActiveConversation(null);
+      setActiveContact(null);
+      setMessages([]);
+      autoSelectedForDeepLinkRef.current = null;
+    }
+  }, [deepLinkConvId]);
 
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
@@ -566,8 +634,20 @@ export default function InboxPage() {
   // before, unchanged.
   const hasActiveConv = !!activeConversation;
 
+  // Fase 2: tell the dashboard shell to hide the app Header under lg
+  // while a thread is open (immersive chat). Cleared on back / unmount
+  // so leaving /inbox never leaves the shell stuck without a Header.
+  useEffect(() => {
+    setMobileChatOpen(hasActiveConv);
+    return () => setMobileChatOpen(false);
+  }, [hasActiveConv, setMobileChatOpen]);
+
   return (
-    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden sm:-m-6">
+    // Height comes from the dashboard shell flex chain (h-dvh → main
+    // flex-1 min-h-0), not calc(100vh - header). That avoids the mobile
+    // browser chrome clipping the composer when the URL bar shows/hides.
+    // Padding is owned by the shell (p-0 on /inbox) so we don't need -m-*.
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       {/* WhatsApp connection banner — in the flex column, not absolute,
           so it pushes the panels down instead of overlapping them. */}
       {whatsappConnected === false && (
@@ -579,14 +659,18 @@ export default function InboxPage() {
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left panel: Conversation list.
-            Hidden on mobile when a conversation is selected so the
-            thread can occupy the full width. Always visible on lg+. */}
+      {/* Mobile (<lg): both panes stay mounted and slide via translate
+          (Fase 5). lg+: classic side-by-side flex; transforms disabled. */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {/* Left panel: Conversation list. */}
         <div
           className={cn(
-            "flex h-full flex-1 lg:flex-none",
-            hasActiveConv ? "hidden lg:flex" : "flex",
+            "flex h-full min-h-0 w-full will-change-transform",
+            "max-lg:absolute max-lg:inset-0 max-lg:transition-transform max-lg:duration-200 max-lg:ease-out",
+            "lg:static lg:w-auto lg:flex-none lg:translate-x-0 lg:transition-none",
+            hasActiveConv
+              ? "max-lg:pointer-events-none max-lg:-translate-x-full lg:flex"
+              : "max-lg:translate-x-0",
           )}
         >
           <ConversationList
@@ -599,10 +683,6 @@ export default function InboxPage() {
         </div>
 
         {/* Center panel: Message thread.
-            Hidden on mobile when no conversation is selected so the
-            list can occupy the full width. Always visible on lg+
-            (shows its own empty-state if no thread is picked yet).
-
             `min-w-0` is load-bearing: without it, a single wide piece
             of content inside the thread (long quote preview, very
             long URL in a message body) forces the flex child past
@@ -610,8 +690,12 @@ export default function InboxPage() {
             on the right. Issue #165. */}
         <div
           className={cn(
-            "flex h-full min-w-0 flex-1 lg:flex",
-            hasActiveConv ? "flex" : "hidden lg:flex",
+            "flex h-full min-h-0 min-w-0 w-full will-change-transform",
+            "max-lg:absolute max-lg:inset-0 max-lg:transition-transform max-lg:duration-200 max-lg:ease-out",
+            "lg:static lg:flex lg:flex-1 lg:translate-x-0 lg:transition-none",
+            hasActiveConv
+              ? "max-lg:translate-x-0"
+              : "max-lg:pointer-events-none max-lg:translate-x-full",
           )}
         >
           <MessageThread
@@ -628,13 +712,14 @@ export default function InboxPage() {
             onRefresh={handleManualRefresh}
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
+            onContactUpdated={handleContactUpdated}
           />
         </div>
 
-        {/* Right panel: Contact sidebar — desktop only, and only when the
-            agent hasn't collapsed it via the thread-header toggle (#258).
-            On mobile it's always hidden (the `lg:block` below), so the
-            toggle — which is itself desktop-only — never affects it. */}
+        {/* Right panel: Contact sidebar — desktop rail only, and only when
+            the agent hasn't collapsed it via the thread-header toggle
+            (#258). On mobile the same ContactSidebar opens inside a Sheet
+            from the thread header (Fase 4 — Info button). */}
         {contactPanelOpen && (
           <div className="hidden lg:block">
             <ContactSidebar

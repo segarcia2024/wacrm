@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isConversationInAgentScope,
   matchesContactFilters,
   normalizeConversation,
 } from "./conversations";
@@ -36,6 +37,26 @@ const tag = (id: string, name = id) => ({
   name,
   color: "#fff",
   created_at: "",
+});
+
+describe("isConversationInAgentScope", () => {
+  it("allows unassigned and self-assigned conversations", () => {
+    expect(
+      isConversationInAgentScope({ assigned_agent_id: undefined }, "u1"),
+    ).toBe(true);
+    expect(
+      isConversationInAgentScope({ assigned_agent_id: null }, "u1"),
+    ).toBe(true);
+    expect(
+      isConversationInAgentScope({ assigned_agent_id: "u1" }, "u1"),
+    ).toBe(true);
+  });
+
+  it("rejects conversations assigned to another agent", () => {
+    expect(
+      isConversationInAgentScope({ assigned_agent_id: "u2" }, "u1"),
+    ).toBe(false);
+  });
 });
 
 describe("matchesContactFilters", () => {
@@ -141,5 +162,45 @@ describe("normalizeConversation", () => {
     };
     // A contactless row passes through untouched (consumers use `?.`).
     expect(normalizeConversation(raw).contact).toBeNull();
+  });
+
+  it("extracts linkedVehicles from open contact deals", () => {
+    const raw = {
+      id: "c1",
+      user_id: "u1",
+      contact_id: "ct1",
+      status: "open" as const,
+      unread_count: 0,
+      created_at: "",
+      updated_at: "",
+      contact: {
+        id: "ct1",
+        user_id: "u1",
+        account_id: "a1",
+        phone: "123",
+        created_at: "",
+        updated_at: "",
+        contact_tags: [],
+        deals: [
+          {
+            id: "d1",
+            status: "open",
+            vehicle: { plate: "ABC123", make: "MAZDA", model: "3" },
+          },
+          {
+            id: "d2",
+            status: "won",
+            vehicle: { plate: "ZZZ999", make: "KIA", model: "RIO" },
+          },
+        ],
+      },
+    };
+    const normalized = normalizeConversation(raw);
+    expect(normalized.linkedVehicles).toEqual([
+      { plate: "ABC123", make: "MAZDA", model: "3" },
+    ]);
+    expect(
+      (normalized.contact as unknown as Record<string, unknown>).deals,
+    ).toBeUndefined();
   });
 });

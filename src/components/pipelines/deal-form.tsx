@@ -9,6 +9,7 @@ import {
   parseDealValue,
   sanitizeDealValueInput,
 } from "@/lib/currency";
+import { titleFromVehicle } from "@/lib/vehicles/deal-vehicle";
 import type {
   Contact,
   Conversation,
@@ -16,7 +17,9 @@ import type {
   DealStatus,
   PipelineStage,
   Profile,
+  Vehicle,
 } from "@/types";
+import { VehiclePicker } from "@/components/inventory/vehicle-picker";
 import {
   Sheet,
   SheetContent,
@@ -61,7 +64,7 @@ export function DealForm({
   const supabase = createClient();
   const { accountId } = useAuth();
 
-  const [title, setTitle] = useState("");
+  const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [value, setValue] = useState("");
   const [contactId, setContactId] = useState("");
   const [stageId, setStageId] = useState("");
@@ -75,6 +78,7 @@ export function DealForm({
     useState<Conversation | null>(null);
 
   const [saving, setSaving] = useState(false);
+  const [loadingVehicle, setLoadingVehicle] = useState(false);
   const [statusAction, setStatusAction] = useState<DealStatus | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -84,7 +88,6 @@ export function DealForm({
     if (!open) return;
     setConfirmDelete(false);
     if (deal) {
-      setTitle(deal.title);
       setValue(deal.value ? String(Math.round(deal.value)) : "");
       setContactId(deal.contact_id ?? "");
       setStageId(deal.stage_id);
@@ -92,7 +95,7 @@ export function DealForm({
       setExpectedCloseDate(deal.expected_close_date ?? "");
       setNotes(deal.notes ?? "");
     } else {
-      setTitle("");
+      setVehicle(null);
       setValue("");
       setContactId("");
       setStageId(defaultStageId || stages[0]?.id || "");
@@ -102,6 +105,35 @@ export function DealForm({
     }
   }, [open, deal, defaultStageId, stages]);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (!open || !deal?.vehicle_id) {
+      if (open && deal && !deal.vehicle_id) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setVehicle(null);
+      }
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setLoadingVehicle(true);
+      const { data, error } = await supabase
+        .from("vehicles")
+        .select("*")
+        .eq("id", deal.vehicle_id!)
+        .maybeSingle();
+      if (cancelled) return;
+      setLoadingVehicle(false);
+      if (error || !data) {
+        setVehicle(null);
+        return;
+      }
+      setVehicle(data as Vehicle);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, deal, supabase]);
 
   useEffect(() => {
     if (!open) return;
@@ -128,6 +160,24 @@ export function DealForm({
     }
     let cancelled = false;
     (async () => {
+      // Prefer the deal's stored conversation_id (exact chat) when the
+      // contact hasn't been switched in the form.
+      if (
+        deal?.conversation_id &&
+        (!deal.contact_id || deal.contact_id === contactId)
+      ) {
+        const { data } = await supabase
+          .from("conversations")
+          .select("*")
+          .eq("id", deal.conversation_id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (data) {
+          setLinkedConversation(data as Conversation);
+          return;
+        }
+      }
+
       const { data } = await supabase
         .from("conversations")
         .select("*")
@@ -141,20 +191,34 @@ export function DealForm({
     return () => {
       cancelled = true;
     };
-  }, [open, contactId, supabase]);
+  }, [open, contactId, deal?.conversation_id, supabase]);
+
+  function handleVehicleChange(next: Vehicle | null) {
+    setVehicle(next);
+    if (next) {
+      setValue(next.price ? String(Math.round(next.price)) : "");
+    }
+  }
 
   async function handleSave() {
-    if (!title.trim() || !contactId || !stageId) {
-      toast.error(t("toastRequired"));
+    if (!vehicle || !contactId || !stageId) {
+      toast.error(t("toastRequiredVehicle"));
+      return;
+    }
+    const title = titleFromVehicle(vehicle);
+    if (!title) {
+      toast.error(t("toastRequiredVehicle"));
       return;
     }
     setSaving(true);
 
     const payload = {
-      title: title.trim(),
+      title,
+      vehicle_id: vehicle.id,
       value: parseDealValue(value),
       currency: DEFAULT_CURRENCY,
       contact_id: contactId,
+      conversation_id: linkedConversation?.id ?? deal?.conversation_id ?? null,
       pipeline_id: pipelineId,
       stage_id: stageId,
       assigned_to: assignedTo || null,
@@ -251,15 +315,18 @@ export function DealForm({
           </SheetHeader>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            <div className="grid gap-2">
-              <Label className="text-muted-foreground">{t("title")}</Label>
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder={t("titlePlaceholder")}
-                className="border-border bg-muted text-foreground"
+            {loadingVehicle ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("loadingVehicle")}
+              </div>
+            ) : (
+              <VehiclePicker
+                value={vehicle}
+                onChange={handleVehicleChange}
+                includeVehicleId={deal?.vehicle_id}
               />
-            </div>
+            )}
 
             <div className="grid gap-2">
               <Label className="text-muted-foreground">{t("contact")}</Label>
@@ -276,15 +343,19 @@ export function DealForm({
                 ))}
               </select>
 
-              {linkedConversation && (
+              {linkedConversation ? (
                 <Link
-                  href="/inbox"
+                  href={`/inbox?c=${linkedConversation.id}`}
                   className="mt-1 inline-flex items-center gap-1.5 self-start rounded-md bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20"
                 >
                   <MessageSquare className="h-3 w-3" />
-                  {t("linkToConversation")}
+                  {t("openConversation")}
                 </Link>
-              )}
+              ) : contactId ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t("noConversation")}
+                </p>
+              ) : null}
             </div>
 
             <div className="grid gap-2">
@@ -420,7 +491,13 @@ export function DealForm({
               </Button>
               <Button
                 onClick={handleSave}
-                disabled={saving || !title.trim() || !contactId || !stageId}
+                disabled={
+                  saving ||
+                  loadingVehicle ||
+                  !vehicle ||
+                  !contactId ||
+                  !stageId
+                }
                 className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 {saving ? t("saving") : deal ? t("saveChanges") : t("createDeal")}
