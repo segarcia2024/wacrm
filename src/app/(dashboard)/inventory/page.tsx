@@ -93,7 +93,7 @@ export default function InventoryPage() {
     let query = supabase
       .from("vehicles")
       .select(
-        "*, buyer:contacts!buyer_contact_id(id, name, phone), seller:profiles!sold_by(id, full_name), deals(id, status, conversation_id, stage:pipeline_stages(name))",
+        "*, buyer:contacts!buyer_contact_id(id, name, phone), seller:profiles!sold_by(id, full_name), deals!deals_vehicle_id_fkey(id, status, conversation_id, stage:pipeline_stages(name))",
         { count: "exact" },
       )
       .order("created_at", { ascending: false })
