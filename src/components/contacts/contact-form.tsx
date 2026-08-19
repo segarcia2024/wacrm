@@ -124,7 +124,7 @@ export function ContactForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!phone.trim()) {
+    if (!isEdit && !phone.trim()) {
       toast.error(t('phoneRequired'));
       return;
     }
@@ -153,7 +153,7 @@ export function ContactForm({
           .from('contacts')
           .update({
             name: name.trim() || null,
-            phone: phone.trim(),
+            phone: phone.trim() || null,
             email: email.trim() || null,
             company: company.trim() || null,
             updated_at: new Date().toISOString(),
@@ -167,7 +167,7 @@ export function ContactForm({
             user_id: user.id,
             account_id: accountId,
             name: name.trim() || null,
-            phone: phone.trim(),
+            phone: phone.trim() || null,
             email: email.trim() || null,
             company: company.trim() || null,
           })
@@ -253,7 +253,7 @@ export function ContactForm({
 
           <div className="space-y-2">
             <Label htmlFor="cf-phone" className="text-muted-foreground">
-              {t('phoneLabel')} <span className="text-red-400">*</span>
+              {t('phoneLabel')} {!isEdit && <span className="text-red-400">*</span>}
             </Label>
             <Input
               id="cf-phone"
@@ -287,7 +287,7 @@ export function ContactForm({
                       onClick={() => onViewExisting(dupMatch.contact.id)}
                       className="font-medium underline underline-offset-2 hover:no-underline"
                     >
-                      {t('viewExisting', { name: dupMatch.contact.name || dupMatch.contact.phone })}
+                      {t('viewExisting', { name: dupMatch.contact.name || dupMatch.contact.phone || '' })}
                     </button>
                   )}
                 </div>

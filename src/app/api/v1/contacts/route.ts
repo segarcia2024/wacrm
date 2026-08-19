@@ -56,7 +56,10 @@ export async function GET(request: Request) {
       .eq('account_id', ctx.accountId);
 
     if (search) {
-      query = query.or(`name.ilike.*${search}*,phone.ilike.*${search}*`);
+      const uname = search.replace(/^@+/, '');
+      query = query.or(
+        `name.ilike.*${search}*,phone.ilike.*${search}*,username.ilike.*${uname}*,bsuid.ilike.*${search}*,wa_id.ilike.*${search}*`,
+      );
     }
 
     if (tag) {

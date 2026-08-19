@@ -1,10 +1,21 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type MouseEvent,
+} from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { useCan } from "@/hooks/use-can";
 import { formatCurrency } from "@/lib/currency";
+import {
+  contactPrimaryLabel,
+  formatWhatsAppUsername,
+  visiblePhone,
+} from "@/lib/contacts/display";
 import type {
   Contact,
   Deal,
@@ -28,21 +39,41 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { InboxDealForm } from "@/components/inbox/inbox-deal-form";
+import {
+  InboxDealForm,
+  type InboxDealSavedEvent,
+} from "@/components/inbox/inbox-deal-form";
 import { AppointmentForm } from "@/components/appointments/appointment-form";
 import { format } from "date-fns";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import {
+  findExistingContact,
+  isExactMatch,
+  isUniqueViolation,
+} from "@/lib/contacts/dedupe";
+import {
+  isValidE164,
+  sanitizePhoneForMeta,
+} from "@/lib/whatsapp/phone-utils";
 
-type EditableField = "name" | "email" | "company";
+type EditableField = "name" | "email" | "company" | "phone";
 
 interface ContactSidebarProps {
   contact: Contact | null;
   /** Active inbox conversation — written to deals.conversation_id on create. */
   conversationId?: string | null;
-  /** Called after name/email/company are saved so the inbox can refresh. */
+  /** Called after name/email/company/phone are saved so the inbox can refresh. */
   onContactUpdated?: (contact: Contact) => void;
+  /** Called after a deal is saved/deleted/status-changed from the inbox form. */
+  onDealChanged?: (event?: InboxDealSavedEvent) => void;
+  /**
+   * `panel` (default) — fixed desktop rail (`w-70` + left border).
+   * `sheet` — fills a mobile Sheet; no fixed width / border (Fase 4
+   * INBOX-MOBILE-RESPONSIVE). Same CRM content either way.
+   */
+  variant?: "panel" | "sheet";
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -51,11 +82,13 @@ export function ContactSidebar({
   contact,
   conversationId,
   onContactUpdated,
+  onDealChanged,
+  variant = "panel",
 }: ContactSidebarProps) {
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
 
-  const { accountId } = useAuth();
+  const { accountId, canViewAllDeals } = useAuth();
   const canEdit = useCan("send-messages");
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -77,12 +110,17 @@ export function ContactSidebar({
   const [draftName, setDraftName] = useState("");
   const [draftEmail, setDraftEmail] = useState("");
   const [draftCompany, setDraftCompany] = useState("");
+  const [draftPhone, setDraftPhone] = useState("");
   const [editingField, setEditingField] = useState<EditableField | null>(null);
   const [savingField, setSavingField] = useState<EditableField | null>(null);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [togglingTagId, setTogglingTagId] = useState<string | null>(null);
 
   const skipBlurSaveRef = useRef(false);
+
+  const visibleDeals = canViewAllDeals
+    ? deals
+    : deals.filter((d) => d.status !== "lost");
 
   const fetchContactData = useCallback(async () => {
     if (!contact) return;
@@ -144,16 +182,22 @@ export function ContactSidebar({
     setDraftName(contact.name ?? "");
     setDraftEmail(contact.email ?? "");
     setDraftCompany(contact.company ?? "");
+    setDraftPhone(contact.phone ?? "");
     setEditingField(null);
     setTagPickerOpen(false);
   }, [contact]);
 
-  const handleCopyPhone = useCallback(async () => {
-    if (!contact?.phone) return;
-    await navigator.clipboard.writeText(contact.phone);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [contact]);
+  const handleCopyPhone = useCallback(
+    async (e: MouseEvent) => {
+      e.stopPropagation();
+      const phone = draftPhone.trim() || contact?.phone;
+      if (!phone) return;
+      await navigator.clipboard.writeText(phone);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    },
+    [contact, draftPhone],
+  );
 
   const handleAddNote = useCallback(async () => {
     if (!contact || !newNote.trim()) return;
@@ -237,6 +281,7 @@ export function ContactSidebar({
       if (field === "name") setDraftName(contact.name ?? "");
       if (field === "email") setDraftEmail(contact.email ?? "");
       if (field === "company") setDraftCompany(contact.company ?? "");
+      if (field === "phone") setDraftPhone(contact.phone ?? "");
       setEditingField(null);
     },
     [contact],
@@ -251,7 +296,9 @@ export function ContactSidebar({
           ? draftName
           : field === "email"
             ? draftEmail
-            : draftCompany;
+            : field === "phone"
+              ? draftPhone
+              : draftCompany;
       const next = raw.trim();
       const prev = (contact[field] ?? "").trim();
 
@@ -265,12 +312,52 @@ export function ContactSidebar({
         return;
       }
 
+      let valueToSave: string | null = next || null;
+
+      if (field === "phone") {
+        if (!next) {
+          if (!prev) {
+            setEditingField(null);
+            return;
+          }
+          if (contact.bsuid || contact.wa_id) {
+            valueToSave = null;
+          } else {
+            toast.error(tSidebar("toastPhoneRequired"));
+            return;
+          }
+        } else {
+          const sanitized = sanitizePhoneForMeta(next);
+          if (!isValidE164(sanitized)) {
+            toast.error(tSidebar("toastInvalidPhone"));
+            return;
+          }
+          valueToSave = `+${sanitized}`;
+
+          if (accountId) {
+            const existing = await findExistingContact(
+              createClient(),
+              accountId,
+              valueToSave,
+            );
+            if (
+              existing &&
+              existing.id !== contact.id &&
+              isExactMatch(existing, valueToSave)
+            ) {
+              toast.error(tSidebar("toastPhoneConflict"));
+              return;
+            }
+          }
+        }
+      }
+
       setSavingField(field);
       const supabase = createClient();
       const { error } = await supabase
         .from("contacts")
         .update({
-          [field]: next || null,
+          [field]: valueToSave,
           updated_at: new Date().toISOString(),
         })
         .eq("id", contact.id);
@@ -278,13 +365,21 @@ export function ContactSidebar({
       setSavingField(null);
 
       if (error) {
+        if (field === "phone" && isUniqueViolation(error)) {
+          toast.error(tSidebar("toastPhoneConflict"));
+          return;
+        }
         toast.error(tSidebar("toastFailedContactUpdate"));
         return;
       }
 
+      if (field === "phone" && valueToSave) {
+        setDraftPhone(valueToSave);
+      }
+
       const updated: Contact = {
         ...contact,
-        [field]: next || undefined,
+        [field]: valueToSave || undefined,
         updated_at: new Date().toISOString(),
       };
       onContactUpdated?.(updated);
@@ -298,6 +393,8 @@ export function ContactSidebar({
       draftName,
       draftEmail,
       draftCompany,
+      draftPhone,
+      accountId,
       onContactUpdated,
       tSidebar,
     ],
@@ -367,9 +464,14 @@ export function ContactSidebar({
     [contact, canEdit, tags, tSidebar],
   );
 
+  const shellClass =
+    variant === "sheet"
+      ? "flex h-full w-full flex-col bg-card"
+      : "flex h-full w-70 flex-col border-l border-border bg-card";
+
   if (!contact) {
     return (
-      <div className="flex h-full w-70 items-center justify-center border-l border-border bg-card">
+      <div className={cn(shellClass, "items-center justify-center")}>
         <p className="text-sm text-muted-foreground">
           {tThread("selectConversation")}
         </p>
@@ -377,13 +479,21 @@ export function ContactSidebar({
     );
   }
 
-  const displayName = draftName.trim() || contact.phone;
+  const displayName = contactPrimaryLabel({
+    name: draftName.trim() || contact.name,
+    phone: draftPhone.trim() || contact.phone,
+    username: contact.username,
+    bsuid: contact.bsuid,
+    wa_id: contact.wa_id,
+  });
   const initials = displayName.charAt(0).toUpperCase();
   const assignedTagIds = new Set(tags.map((t) => t.id));
   const availableTags = allTags.filter((t) => !assignedTagIds.has(t.id));
+  const hasPhone = Boolean(visiblePhone(draftPhone) || visiblePhone(contact.phone));
+  const usernameLabel = formatWhatsAppUsername(contact.username);
 
   return (
-    <div className="flex h-full w-70 flex-col border-l border-border bg-card">
+    <div className={shellClass}>
       <ScrollArea className="flex-1">
         <div className="p-4">
           {/* Contact Info */}
@@ -433,7 +543,7 @@ export function ContactSidebar({
                 >
                   {draftName.trim() || (
                     <span className="font-normal text-muted-foreground">
-                      {canEdit ? tSidebar("namePlaceholder") : contact.phone}
+                      {canEdit ? tSidebar("namePlaceholder") : displayName}
                     </span>
                   )}
                 </button>
@@ -485,20 +595,90 @@ export function ContactSidebar({
             </div>
           </div>
 
-          {/* Phone (read-only) + Email */}
+          {/* Phone + Email */}
           <div className="mt-4 space-y-2">
-            <button
-              onClick={handleCopyPhone}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
-            >
-              <Phone className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1 text-left">{contact.phone}</span>
-              {copied ? (
-                <Check className="h-3 w-3 text-primary" />
-              ) : (
-                <Copy className="h-3 w-3 text-muted-foreground" />
-              )}
-            </button>
+            {canEdit && editingField === "phone" ? (
+              <div className="flex items-center gap-2 rounded-lg border border-primary/50 bg-muted px-3 py-1.5">
+                <Phone className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <input
+                  autoFocus
+                  type="tel"
+                  inputMode="tel"
+                  value={draftPhone}
+                  disabled={savingField === "phone"}
+                  onChange={(e) => setDraftPhone(e.target.value)}
+                  onBlur={() => handleFieldBlur("phone")}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void saveField("phone");
+                    }
+                    if (e.key === "Escape") cancelEdit("phone");
+                  }}
+                  placeholder={tSidebar("phonePlaceholder")}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none"
+                  aria-label={tSidebar("phone")}
+                />
+              </div>
+            ) : (
+              <div className="flex w-full items-center gap-1">
+                <button
+                  type="button"
+                  disabled={!canEdit}
+                  onClick={() => canEdit && setEditingField("phone")}
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground",
+                    canEdit && "hover:bg-muted cursor-text",
+                    !canEdit && "cursor-default",
+                  )}
+                  title={canEdit ? tSidebar("clickToEdit") : undefined}
+                >
+                  <Phone className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {hasPhone ? (
+                      draftPhone.trim() || contact.phone
+                    ) : canEdit ? (
+                      <span className="text-muted-foreground/70">
+                        {tSidebar("phonePlaceholder")}
+                      </span>
+                    ) : usernameLabel ? (
+                      usernameLabel
+                    ) : contact.bsuid ? (
+                      `WhatsApp: ${contact.bsuid}`
+                    ) : contact.wa_id ? (
+                      `WhatsApp: ${contact.wa_id}`
+                    ) : (
+                      tSidebar("phoneNotShared")
+                    )}
+                  </span>
+                </button>
+                {hasPhone && (
+                  <button
+                    type="button"
+                    onClick={handleCopyPhone}
+                    className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted"
+                    aria-label={tSidebar("copyPhone")}
+                    title={tSidebar("copyPhone")}
+                  >
+                    {copied ? (
+                      <Check className="h-3 w-3 text-primary" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {usernameLabel && (
+              <p className="px-3 text-xs text-muted-foreground">{usernameLabel}</p>
+            )}
+
+            {!hasPhone && (contact.bsuid || contact.wa_id) && editingField !== "phone" && (
+              <p className="px-3 text-[11px] text-muted-foreground">
+                {tSidebar("waIdHint", { id: contact.bsuid || contact.wa_id || "" })}
+              </p>
+            )}
 
             {canEdit && editingField === "email" ? (
               <div className="flex items-center gap-2 rounded-lg border border-primary/50 bg-muted px-3 py-1.5">
@@ -662,19 +842,24 @@ export function ContactSidebar({
               )}
             </div>
             <div className="mt-2 space-y-2">
-              {deals.length === 0 ? (
+              {visibleDeals.length === 0 ? (
                 <p className="px-1 text-xs text-muted-foreground">
                   {tSidebar("noDeals")}
                 </p>
               ) : (
-                deals.map((deal) => {
+                visibleDeals.map((deal) => {
                   const dealStages = stages.filter(
                     (s) => s.pipeline_id === deal.pipeline_id,
                   );
+                  const isLost = deal.status === "lost";
+                  const isWon = deal.status === "won";
                   return (
                     <div
                       key={deal.id}
-                      className="rounded-lg bg-muted px-3 py-2"
+                      className={cn(
+                        "rounded-lg bg-muted px-3 py-2",
+                        isLost && "opacity-80 ring-1 ring-red-500/30",
+                      )}
                     >
                       <button
                         type="button"
@@ -691,9 +876,24 @@ export function ContactSidebar({
                         )}
                         title={canEdit ? tSidebar("editDeal") : undefined}
                       >
-                        <p className="text-sm font-medium text-foreground">
-                          {deal.title}
-                        </p>
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-medium text-foreground">
+                            {deal.title}
+                          </p>
+                          {(isLost || isWon) && (
+                            <span
+                              className={cn(
+                                "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                                isLost && "bg-red-500/15 text-red-400",
+                                isWon && "bg-primary/15 text-primary",
+                              )}
+                            >
+                              {isLost
+                                ? tSidebar("statusLost")
+                                : tSidebar("statusWon")}
+                            </span>
+                          )}
+                        </div>
                         <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
                           <span>{formatCurrency(deal.value)}</span>
                           {deal.stage && !canEdit && (
@@ -708,8 +908,13 @@ export function ContactSidebar({
                             </span>
                           )}
                         </div>
+                        {isLost && deal.notes ? (
+                          <p className="mt-1.5 line-clamp-3 whitespace-pre-wrap text-[11px] text-muted-foreground">
+                            {deal.notes}
+                          </p>
+                        ) : null}
                       </button>
-                      {canEdit && dealStages.length > 0 && (
+                      {canEdit && !isLost && dealStages.length > 0 && (
                         <select
                           value={deal.stage_id}
                           disabled={updatingStageId === deal.id}
@@ -862,7 +1067,10 @@ export function ContactSidebar({
         contactId={contact.id}
         conversationId={conversationId}
         deal={editingDeal}
-        onSaved={fetchContactData}
+        onSaved={(event) => {
+          void fetchContactData();
+          onDealChanged?.(event);
+        }}
       />
 
       <AppointmentForm

@@ -215,10 +215,36 @@ export async function getSubscribedApps(
 // Sending
 // ============================================================
 
-export interface SendTextMessageArgs {
+/**
+ * Cloud API address. Phone numbers use `to`; BSUID uses `recipient`.
+ * Username is not a valid destination. If both are set, `to` wins
+ * (Meta's documented precedence) — callers should send exactly one.
+ */
+export type MetaMessageAddress = {
+  to?: string
+  recipient?: string
+}
+
+export function applyMetaSendAddress(
+  body: Record<string, unknown>,
+  address: MetaMessageAddress,
+): void {
+  const phone = (address.to ?? '').trim()
+  const bsuid = (address.recipient ?? '').trim()
+  if (phone) {
+    body.to = phone
+    return
+  }
+  if (bsuid) {
+    body.recipient = bsuid
+    return
+  }
+  throw new Error('WhatsApp send requires a phone (`to`) or BSUID (`recipient`)')
+}
+
+export interface SendTextMessageArgs extends MetaMessageAddress {
   phoneNumberId: string
   accessToken: string
-  to: string
   text: string
   /** Meta's message_id of the message being replied to. Adds a `context` field
    *  so WhatsApp renders the new message as a reply with a quote preview. */
@@ -232,15 +258,15 @@ export interface SendTextMessageArgs {
 export async function sendTextMessage(
   args: SendTextMessageArgs
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, text, contextMessageId } = args
+  const { phoneNumberId, accessToken, to, recipient, text, contextMessageId } = args
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
     type: 'text',
     text: { body: text },
   }
+  applyMetaSendAddress(body, { to, recipient })
   if (contextMessageId) {
     body.context = { message_id: contextMessageId }
   }
@@ -261,10 +287,9 @@ export async function sendTextMessage(
 
 export type MediaKind = 'image' | 'video' | 'document' | 'audio'
 
-export interface SendMediaMessageArgs {
+export interface SendMediaMessageArgs extends MetaMessageAddress {
   phoneNumberId: string
   accessToken: string
-  to: string
   kind: MediaKind
   /** Public URL Meta fetches at send time. */
   link: string
@@ -290,7 +315,7 @@ export interface SendMediaMessageArgs {
 export async function sendMediaMessage(
   args: SendMediaMessageArgs,
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, kind, link, caption, filename, contextMessageId } = args
+  const { phoneNumberId, accessToken, to, recipient, kind, link, caption, filename, contextMessageId } = args
   if (!link) throw new Error('sendMediaMessage requires a link.')
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
 
@@ -304,10 +329,10 @@ export async function sendMediaMessage(
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
     type: kind,
     [kind]: media,
   }
+  applyMetaSendAddress(body, { to, recipient })
   if (contextMessageId) body.context = { message_id: contextMessageId }
 
   const response = await fetch(url, {
@@ -331,10 +356,9 @@ import {
   type SendTimeParams,
 } from './template-send-builder'
 
-export interface SendTemplateMessageArgs {
+export interface SendTemplateMessageArgs extends MetaMessageAddress {
   phoneNumberId: string
   accessToken: string
-  to: string
   templateName: string
   language?: string
   /**
@@ -380,6 +404,7 @@ export async function sendTemplateMessage(
     phoneNumberId,
     accessToken,
     to,
+    recipient,
     templateName,
     language = 'en_US',
     params,
@@ -420,10 +445,10 @@ export async function sendTemplateMessage(
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
     type: 'template',
     template: templatePayload,
   }
+  applyMetaSendAddress(body, { to, recipient })
   if (contextMessageId) {
     body.context = { message_id: contextMessageId }
   }
@@ -663,10 +688,9 @@ export async function deleteMessageTemplate(
 // Reactions
 // ============================================================
 
-export interface SendReactionMessageArgs {
+export interface SendReactionMessageArgs extends MetaMessageAddress {
   phoneNumberId: string
   accessToken: string
-  to: string
   /** Meta's message_id of the message being reacted to. */
   targetMessageId: string
   /** Single emoji, or empty string to remove an existing reaction. */
@@ -680,21 +704,22 @@ export interface SendReactionMessageArgs {
 export async function sendReactionMessage(
   args: SendReactionMessageArgs
 ): Promise<MetaSendResult> {
-  const { phoneNumberId, accessToken, to, targetMessageId, emoji } = args
+  const { phoneNumberId, accessToken, to, recipient, targetMessageId, emoji } = args
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const reactionBody: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    type: 'reaction',
+    reaction: { message_id: targetMessageId, emoji },
+  }
+  applyMetaSendAddress(reactionBody, { to, recipient })
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to,
-      type: 'reaction',
-      reaction: { message_id: targetMessageId, emoji },
-    }),
+    body: JSON.stringify(reactionBody),
   })
   if (!response.ok) {
     await throwMetaError(response, `Meta API error: ${response.status}`)
@@ -739,10 +764,9 @@ export interface InteractiveButton {
   title: string
 }
 
-export interface SendInteractiveButtonsArgs {
+export interface SendInteractiveButtonsArgs extends MetaMessageAddress {
   phoneNumberId: string
   accessToken: string
-  to: string
   /** The body text — what the customer reads above the buttons. */
   bodyText: string
   /** Optional plain-text header (≤ 60 chars). */
@@ -767,7 +791,7 @@ export async function sendInteractiveButtons(
   args: SendInteractiveButtonsArgs
 ): Promise<MetaSendResult> {
   const {
-    phoneNumberId, accessToken, to,
+    phoneNumberId, accessToken, to, recipient,
     bodyText, headerText, footerText, buttons, contextMessageId,
   } = args
   validateInteractiveBody(bodyText)
@@ -811,10 +835,10 @@ export async function sendInteractiveButtons(
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
     type: 'interactive',
     interactive,
   }
+  applyMetaSendAddress(body, { to, recipient })
   if (contextMessageId) body.context = { message_id: contextMessageId }
 
   const url = `${META_API_BASE}/${phoneNumberId}/messages`
@@ -848,10 +872,9 @@ export interface InteractiveListSection {
   rows: InteractiveListRow[]
 }
 
-export interface SendInteractiveListArgs {
+export interface SendInteractiveListArgs extends MetaMessageAddress {
   phoneNumberId: string
   accessToken: string
-  to: string
   bodyText: string
   /** Label of the tap-to-expand button on the message bubble. */
   buttonLabel: string
@@ -875,7 +898,7 @@ export async function sendInteractiveList(
   args: SendInteractiveListArgs
 ): Promise<MetaSendResult> {
   const {
-    phoneNumberId, accessToken, to,
+    phoneNumberId, accessToken, to, recipient,
     bodyText, buttonLabel, headerText, footerText, sections, contextMessageId,
   } = args
   validateInteractiveBody(bodyText)
@@ -943,10 +966,10 @@ export async function sendInteractiveList(
   const body: Record<string, unknown> = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to,
     type: 'interactive',
     interactive,
   }
+  applyMetaSendAddress(body, { to, recipient })
   if (contextMessageId) body.context = { message_id: contextMessageId }
 
   const url = `${META_API_BASE}/${phoneNumberId}/messages`

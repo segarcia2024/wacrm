@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERACTIVE_LIMITS,
+  applyMetaSendAddress,
   sendInteractiveButtons,
   sendInteractiveList,
 } from "./meta-api";
@@ -265,5 +266,33 @@ describe("sendInteractiveList — validation", () => {
         },
       },
     });
+  });
+});
+
+describe("applyMetaSendAddress", () => {
+  it("sets `to` for a phone and omits `recipient`", () => {
+    const body: Record<string, unknown> = {};
+    applyMetaSendAddress(body, { to: "573001234567" });
+    expect(body).toEqual({ to: "573001234567" });
+  });
+
+  it("sets `recipient` for a BSUID and omits `to`", () => {
+    const body: Record<string, unknown> = {};
+    applyMetaSendAddress(body, { recipient: "CO.ABC123DEF456" });
+    expect(body).toEqual({ recipient: "CO.ABC123DEF456" });
+  });
+
+  it("lets phone win when both are provided (Meta precedence)", () => {
+    const body: Record<string, unknown> = {};
+    applyMetaSendAddress(body, {
+      to: "573001234567",
+      recipient: "CO.ABC123DEF456",
+    });
+    expect(body).toEqual({ to: "573001234567" });
+    expect(body.recipient).toBeUndefined();
+  });
+
+  it("throws when neither address is present", () => {
+    expect(() => applyMetaSendAddress({}, {})).toThrow(/phone|BSUID/);
   });
 });

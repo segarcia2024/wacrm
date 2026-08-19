@@ -10,12 +10,25 @@ import {
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
-  sanitizePhoneForMeta,
-  isValidE164,
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
+import {
+  isPhoneRecipient,
+  resolveWhatsAppRecipient,
+} from '@/lib/whatsapp/wa-identity'
+import { toMetaMessageAddress } from '@/lib/whatsapp/recipient-resolver'
 import { supabaseAdmin } from './admin-client'
+
+function requireOutboundRecipient(contact: {
+  phone?: string | null
+  wa_id?: string | null
+  bsuid?: string | null
+}) {
+  const resolved = resolveWhatsAppRecipient(contact)
+  if (!resolved) throw new Error('contact has no phone or WhatsApp id')
+  return resolved
+}
 
 // ------------------------------------------------------------
 // Flows-side Meta sender (interactive variants).
@@ -69,18 +82,16 @@ export async function engineSendText(
 
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, phone')
+    .select('id, phone, wa_id, bsuid, username')
     .eq('id', args.contactId)
     .eq('account_id', args.accountId)
     .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  if (contactErr || !contact) {
     throw new Error('contact not found for this account')
   }
 
-  const sanitized = sanitizePhoneForMeta(contact.phone)
-  if (!isValidE164(sanitized)) {
-    throw new Error(`contact phone invalid: ${contact.phone}`)
-  }
+  const resolved = requireOutboundRecipient(contact)
+  const sanitized = resolved.value
 
   const { data: config, error: configErr } = await db
     .from('whatsapp_config')
@@ -97,13 +108,14 @@ export async function engineSendText(
     const r = await sendTextMessage({
       phoneNumberId: config.phone_number_id,
       accessToken,
-      to: phone,
+      ...toMetaMessageAddress(resolved, phone),
       text: args.text,
     })
     return r.messageId
   }
 
-  const variants = phoneVariants(sanitized)
+  const usePhoneVariants = resolved.type === 'phone' && isPhoneRecipient(sanitized)
+  const variants = usePhoneVariants ? phoneVariants(sanitized) : [sanitized]
   let workingPhone = sanitized
   let waMessageId = ''
   let lastError: unknown = null
@@ -121,7 +133,7 @@ export async function engineSendText(
   }
   if (lastError) throw lastError
 
-  if (workingPhone !== sanitized) {
+  if (usePhoneVariants && workingPhone !== sanitized) {
     await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
   }
 
@@ -179,18 +191,16 @@ export async function engineSendMedia(
 
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, phone')
+    .select('id, phone, wa_id, bsuid, username')
     .eq('id', args.contactId)
     .eq('account_id', args.accountId)
     .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  if (contactErr || !contact) {
     throw new Error('contact not found for this account')
   }
 
-  const sanitized = sanitizePhoneForMeta(contact.phone)
-  if (!isValidE164(sanitized)) {
-    throw new Error(`contact phone invalid: ${contact.phone}`)
-  }
+  const resolved = requireOutboundRecipient(contact)
+  const sanitized = resolved.value
 
   const { data: config, error: configErr } = await db
     .from('whatsapp_config')
@@ -207,7 +217,7 @@ export async function engineSendMedia(
     const r = await sendMediaMessage({
       phoneNumberId: config.phone_number_id,
       accessToken,
-      to: phone,
+      ...toMetaMessageAddress(resolved, phone),
       kind: args.kind,
       link: args.link,
       caption: args.caption,
@@ -216,7 +226,8 @@ export async function engineSendMedia(
     return r.messageId
   }
 
-  const variants = phoneVariants(sanitized)
+  const usePhoneVariants = resolved.type === 'phone' && isPhoneRecipient(sanitized)
+  const variants = usePhoneVariants ? phoneVariants(sanitized) : [sanitized]
   let workingPhone = sanitized
   let waMessageId = ''
   let lastError: unknown = null
@@ -234,7 +245,7 @@ export async function engineSendMedia(
   }
   if (lastError) throw lastError
 
-  if (workingPhone !== sanitized) {
+  if (usePhoneVariants && workingPhone !== sanitized) {
     await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
   }
 
@@ -331,18 +342,16 @@ async function sendInteractiveViaMeta(
   // Migration 017 moved both tables to account-scoped tenancy.
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, phone')
+    .select('id, phone, wa_id, bsuid, username')
     .eq('id', input.contactId)
     .eq('account_id', input.accountId)
     .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  if (contactErr || !contact) {
     throw new Error('contact not found for this account')
   }
 
-  const sanitized = sanitizePhoneForMeta(contact.phone)
-  if (!isValidE164(sanitized)) {
-    throw new Error(`contact phone invalid: ${contact.phone}`)
-  }
+  const resolved = requireOutboundRecipient(contact)
+  const sanitized = resolved.value
 
   const { data: config, error: configErr } = await db
     .from('whatsapp_config')
@@ -356,11 +365,12 @@ async function sendInteractiveViaMeta(
   const accessToken = decrypt(config.access_token)
 
   const attempt = async (phone: string): Promise<string> => {
+    const address = toMetaMessageAddress(resolved, phone)
     if (input.kind === 'buttons') {
       const r = await sendInteractiveButtons({
         phoneNumberId: config.phone_number_id,
         accessToken,
-        to: phone,
+        ...address,
         bodyText: input.bodyText,
         buttons: input.buttons,
         headerText: input.headerText,
@@ -371,7 +381,7 @@ async function sendInteractiveViaMeta(
     const r = await sendInteractiveList({
       phoneNumberId: config.phone_number_id,
       accessToken,
-      to: phone,
+      ...address,
       bodyText: input.bodyText,
       buttonLabel: input.buttonLabel,
       sections: input.sections,
@@ -381,10 +391,10 @@ async function sendInteractiveViaMeta(
     return r.messageId
   }
 
-  // Same phone-variant retry as automations/meta-send.ts. Numbers
-  // registered with/without a trunk 0 + Meta's sandbox quirks all
-  // need this to reliably land a message.
-  const variants = phoneVariants(sanitized)
+  // Same phone-variant retry as automations/meta-send.ts. BSUID/LID skip
+  // variant expansion — only real E.164 numbers benefit from it.
+  const usePhoneVariants = resolved.type === 'phone' && isPhoneRecipient(sanitized)
+  const variants = usePhoneVariants ? phoneVariants(sanitized) : [sanitized]
   let workingPhone = sanitized
   let waMessageId = ''
   let lastError: unknown = null
@@ -402,7 +412,7 @@ async function sendInteractiveViaMeta(
   }
   if (lastError) throw lastError
 
-  if (workingPhone !== sanitized) {
+  if (usePhoneVariants && workingPhone !== sanitized) {
     await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
   }
 

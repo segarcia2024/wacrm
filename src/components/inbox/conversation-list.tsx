@@ -5,10 +5,12 @@ import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
   CONVERSATION_SELECT_LEGACY,
+  isLostDealConversation,
   matchesContactFilters,
   normalizeConversations,
 } from "@/lib/inbox/conversations";
 import { matchesVehicleSearch } from "@/lib/vehicles/search";
+import { contactPrimaryLabel } from "@/lib/contacts/display";
 import { cn } from "@/lib/utils";
 import type { Conversation, ConversationStatus, Tag } from "@/types";
 import { Search, ChevronDown, X } from "lucide-react";
@@ -58,7 +60,7 @@ export function ConversationList({
   resyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
-  const { user } = useAuth();
+  const { user, canViewAllConversations } = useAuth();
 
   const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
     { label: t("filterAll"), value: "all" },
@@ -186,6 +188,12 @@ export function ConversationList({
   const filtered = useMemo(() => {
     let result = conversations;
 
+    // Agents/viewers never see threads whose linked deal was marked lost;
+    // admins keep them (notes / history).
+    if (!canViewAllConversations) {
+      result = result.filter((c) => !isLostDealConversation(c));
+    }
+
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
     } else if (filter !== "all") {
@@ -213,10 +221,18 @@ export function ConversationList({
       result = result.filter((c) => {
         const name = c.contact?.name?.toLowerCase() ?? "";
         const phone = c.contact?.phone?.toLowerCase() ?? "";
+        const username = c.contact?.username?.toLowerCase() ?? "";
+        const bsuid = c.contact?.bsuid?.toLowerCase() ?? "";
+        const waId = c.contact?.wa_id?.toLowerCase() ?? "";
         const lastMsg = c.last_message_text?.toLowerCase() ?? "";
+        const qBare = q.replace(/^@+/, "");
         return (
           name.includes(q) ||
           phone.includes(q) ||
+          username.includes(qBare) ||
+          `@${username}`.includes(q) ||
+          bsuid.toLowerCase().includes(q) ||
+          waId.includes(q) ||
           lastMsg.includes(q) ||
           matchesVehicleSearch(c.linkedVehicles, q)
         );
@@ -232,6 +248,7 @@ export function ConversationList({
     selectedTagIds,
     selectedCompany,
     user?.id,
+    canViewAllConversations,
   ]);
 
   const toggleTag = useCallback((id: string) => {
@@ -493,6 +510,9 @@ export function ConversationList({
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                showLostBadge={
+                  canViewAllConversations && isLostDealConversation(conv)
+                }
                 t={t}
               />
             ))}
@@ -507,6 +527,7 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  showLostBadge?: boolean;
   t: ReturnType<typeof useTranslations>;
 }
 
@@ -514,10 +535,11 @@ function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  showLostBadge = false,
   t,
 }: ConversationItemProps) {
   const contact = conversation.contact;
-  const displayName = contact?.name || contact?.phone || t("unknown");
+  const displayName = contactPrimaryLabel(contact, t("unknown"));
   const initials = displayName.charAt(0).toUpperCase();
 
   const handleClick = useCallback(() => {
@@ -564,6 +586,11 @@ function ConversationItem({
             {conversation.last_message_text || t("noMessagesYet")}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
+            {showLostBadge && (
+              <span className="rounded bg-red-500/15 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-red-400">
+                {t("lostBadge")}
+              </span>
+            )}
             {conversation.unread_count > 0 && (
               <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
                 {conversation.unread_count}

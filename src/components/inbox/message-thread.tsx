@@ -7,6 +7,10 @@ import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
 import { presenceLabel } from "@/lib/presence";
 import { cn } from "@/lib/utils";
+import {
+  contactPrimaryLabel,
+  contactSecondaryLabel,
+} from "@/lib/contacts/display";
 import type {
   Conversation,
   Message,
@@ -27,6 +31,8 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Info,
+  MoreVertical,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -34,13 +40,23 @@ import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
+import { ContactSidebar } from "./contact-sidebar";
+import type { InboxDealSavedEvent } from "./inbox-deal-form";
 import {
   MessageComposer,
   CHAT_MEDIA_BUCKET,
@@ -109,6 +125,15 @@ interface MessageThreadProps {
    */
   contactPanelOpen?: boolean;
   onToggleContactPanel?: () => void;
+  /**
+   * Mobile contact Sheet (Fase 4). Same callback the desktop sidebar
+   * uses so ficha edits sync back to the list/header. Optional so
+   * callers without CRM wiring still compile; the info button still
+   * opens the sheet, but saves that need the callback no-op upstream.
+   */
+  onContactUpdated?: (contact: Contact) => void;
+  /** Deal create/update/status/delete from the mobile CRM sheet. */
+  onDealChanged?: (event?: InboxDealSavedEvent) => void;
 }
 
 function formatDateSeparator(dateStr: string, t: ReturnType<typeof useTranslations>): string {
@@ -167,6 +192,8 @@ export function MessageThread({
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
+  onContactUpdated,
+  onDealChanged,
 }: MessageThreadProps) {
   const t = useTranslations("Inbox.messageThread");
   const tTimer = useTranslations("Inbox.sessionTimer");
@@ -177,6 +204,13 @@ export function MessageThread({
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  // Mobile CRM Sheet — Accesibilidad Conversaciones (ficha/deals/citas)
+  // via ContactSidebar. Closed whenever the active conversation changes
+  // so a stale sheet doesn't linger after back→new chat.
+  const [contactSheetOpen, setContactSheetOpen] = useState(false);
+  useEffect(() => {
+    setContactSheetOpen(false);
+  }, [conversation?.id]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
   // Purely visual spin state for the manual-refresh button. The actual
@@ -729,7 +763,7 @@ export function MessageThread({
     return map;
   }, [reactions]);
 
-  const contactDisplayName = contact?.name || contact?.phone || "Customer";
+  const contactDisplayName = contactPrimaryLabel(contact, "Customer");
 
   // Author label for a quoted message: "You" when we sent the parent,
   // contact name when the customer sent it.
@@ -857,7 +891,8 @@ export function MessageThread({
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const displayName = contactPrimaryLabel(contact);
+  const secondaryLabel = contactSecondaryLabel(contact);
   const messageGroups = groupMessagesByDate(messages);
   const currentStatus = STATUS_OPTIONS.find(
     (s) => s.value === conversation.status
@@ -879,8 +914,10 @@ export function MessageThread({
     // Issue #257.
     <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
-          name/avatar/dropdowns stay legible. */}
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
+          name/avatar/dropdowns stay legible. On mobile immersive chat
+          (app Header hidden — Fase 2) the top padding includes the
+          notch safe-area so back/name aren't under the status bar. */}
+      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 max-lg:pt-[max(0.75rem,env(safe-area-inset-top,0px))] sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
@@ -899,7 +936,9 @@ export function MessageThread({
           </div>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
-            <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
+            {secondaryLabel ? (
+              <p className="truncate text-xs text-muted-foreground">{secondaryLabel}</p>
+            ) : null}
           </div>
           {/* Session timer badge — hidden on the narrowest phones so
               the name + back arrow keep their room. */}
@@ -916,6 +955,19 @@ export function MessageThread({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Mobile contact Sheet — same ContactSidebar CRM as desktop
+              (ficha / tags / deals / citas / notes). lg+ uses the rail
+              + PanelRight toggle below instead (Fase 4). */}
+          <button
+            type="button"
+            onClick={() => setContactSheetOpen(true)}
+            aria-label={t("contactDetailsAria")}
+            title={t("contactDetails")}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+          >
+            <Info className="h-4 w-4" />
+          </button>
+
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
@@ -943,11 +995,111 @@ export function MessageThread({
             </button>
           )}
 
-          {/* Manual refresh — forces a refetch of the messages + the
-              conversation list (the parent bumps its resyncToken). Useful
-              when realtime missed an event or the agent just wants to be
-              sure nothing's stale. Only rendered when the parent wires
-              up `onRefresh`. */}
+          {/* Fase 5: mobile overflow — status / assign / refresh in one
+              ⋯ menu so the immersive header stays roomy. Desktop keeps
+              the historical inline controls below. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label={t("moreActionsAria")}
+              title={t("moreActions")}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="max-h-[70vh] w-56 overflow-y-auto border-border bg-popover"
+            >
+              {/* DropdownMenuLabel = base-ui GroupLabel — must sit inside
+                  DropdownMenuGroup or MenuGroupContext is missing. */}
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  {t("status")}
+                </DropdownMenuLabel>
+                {STATUS_OPTIONS.map((opt) => (
+                  <DropdownMenuItem
+                    key={opt.value}
+                    onClick={() => handleStatusChange(opt.value)}
+                    className={cn("text-sm", opt.color)}
+                  >
+                    <span className="flex-1">{t(`status${opt.label}`)}</span>
+                    {conversation.status === opt.value && (
+                      <Check className="ml-2 h-3 w-3" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator className="bg-border" />
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  {t("assign")}
+                </DropdownMenuLabel>
+                {profiles.length === 0 ? (
+                  <DropdownMenuItem disabled className="text-sm text-muted-foreground">
+                    {t("noTeammates")}
+                  </DropdownMenuItem>
+                ) : (
+                  profiles.map((p) => {
+                    const isSelected = p.user_id === assignedAgentId;
+                    const presence = getPresence(p.user_id);
+                    return (
+                      <DropdownMenuItem
+                        key={p.id}
+                        onClick={() => handleAssignChange(p.user_id)}
+                        className={cn(
+                          "text-sm",
+                          isSelected ? "text-primary" : "text-popover-foreground",
+                        )}
+                      >
+                        <PresenceDot
+                          status={presence}
+                          label={presenceLabel(
+                            presence,
+                            getRow(p.user_id)?.last_seen_at ?? null,
+                            now,
+                          )}
+                          className="mr-2"
+                        />
+                        <span className="flex-1 truncate">
+                          {p.full_name}
+                          {p.user_id === user?.id ? t("me") : ""}
+                        </span>
+                        {isSelected && <Check className="ml-2 h-3 w-3" />}
+                      </DropdownMenuItem>
+                    );
+                  })
+                )}
+                {assignedAgentId && (
+                  <DropdownMenuItem
+                    onClick={() => handleAssignChange(null)}
+                    className="text-sm text-muted-foreground"
+                  >
+                    {t("unassign")}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuGroup>
+              {onRefresh && (
+                <>
+                  <DropdownMenuSeparator className="bg-border" />
+                  <DropdownMenuItem
+                    disabled={isRefreshing}
+                    onClick={handleRefreshClick}
+                    className="text-sm"
+                  >
+                    <RefreshCw
+                      className={cn(
+                        "mr-2 h-3.5 w-3.5",
+                        isRefreshing && "animate-spin",
+                      )}
+                    />
+                    {t("refresh")}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Desktop: manual refresh */}
           {onRefresh && (
             <button
               type="button"
@@ -955,9 +1107,7 @@ export function MessageThread({
               disabled={isRefreshing}
               aria-label={t("refreshConversation")}
               title={t("refresh")}
-              className={cn(
-                "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60",
-              )}
+              className="hidden h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60 lg:inline-flex"
             >
               <RefreshCw
                 className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")}
@@ -965,14 +1115,16 @@ export function MessageThread({
             </button>
           )}
 
-          {/* Status dropdown */}
+          {/* Desktop: status dropdown */}
           <DropdownMenu>
-            <DropdownMenuTrigger className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
-                  currentStatus?.color ?? "text-muted-foreground"
-                )}>
-                {currentStatus ? t(`status${currentStatus.label}`) : t("status")}
-                <ChevronDown className="h-3 w-3" />
+            <DropdownMenuTrigger
+              className={cn(
+                "hidden h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted lg:inline-flex",
+                currentStatus?.color ?? "text-muted-foreground",
+              )}
+            >
+              {currentStatus ? t(`status${currentStatus.label}`) : t("status")}
+              <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
@@ -990,12 +1142,12 @@ export function MessageThread({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Assign dropdown */}
+          {/* Desktop: assign dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
-                "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
-                assignedAgentId ? "text-primary" : "text-muted-foreground"
+                "hidden h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted lg:inline-flex",
+                assignedAgentId ? "text-primary" : "text-muted-foreground",
               )}
             >
               <UserPlus className="h-3 w-3" />
@@ -1020,7 +1172,7 @@ export function MessageThread({
                       onClick={() => handleAssignChange(p.user_id)}
                       className={cn(
                         "text-sm",
-                        isSelected ? "text-primary" : "text-popover-foreground"
+                        isSelected ? "text-primary" : "text-popover-foreground",
                       )}
                     >
                       <PresenceDot
@@ -1028,7 +1180,7 @@ export function MessageThread({
                         label={presenceLabel(
                           presence,
                           getRow(p.user_id)?.last_seen_at ?? null,
-                          now
+                          now,
                         )}
                         className="mr-2"
                       />
@@ -1091,7 +1243,7 @@ export function MessageThread({
                           authorLabel:
                             parent.sender_type === "agent" || parent.sender_type === "bot"
                               ? t("me") 
-                              : contact?.name || contact?.phone || "Unknown",
+                              : contactPrimaryLabel(contact, "Unknown"),
                           preview: buildReplyPreview(parent, tQuote),
                         }
                       : null;
@@ -1166,6 +1318,30 @@ export function MessageThread({
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
       />
+
+      {/* Mobile CRM Sheet — mounts ContactSidebar only while open so we
+          don't double-fetch against the desktop rail (which stays
+          `hidden lg:block` on the page). Nested deal/appointment sheets
+          portal above this one. */}
+      <Sheet open={contactSheetOpen} onOpenChange={setContactSheetOpen}>
+        <SheetContent
+          side="right"
+          className="w-full gap-0 p-0 sm:max-w-sm"
+        >
+          <SheetHeader className="shrink-0 border-b border-border pr-12">
+            <SheetTitle>{t("contactDetails")}</SheetTitle>
+          </SheetHeader>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <ContactSidebar
+              variant="sheet"
+              contact={contact}
+              conversationId={conversation.id}
+              onContactUpdated={onContactUpdated}
+              onDealChanged={onDealChanged}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

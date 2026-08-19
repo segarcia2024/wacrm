@@ -2,8 +2,8 @@ import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
-import { normalizePhone } from '@/lib/whatsapp/phone-utils'
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import { isUniqueViolation, upsertWhatsAppContact } from '@/lib/contacts/dedupe'
+import { resolveInboundIdentity } from '@/lib/whatsapp/wa-identity'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
@@ -13,6 +13,7 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
+import { parseTemplateButtonReply } from '@/lib/whatsapp/parse-button-reply'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -35,7 +36,8 @@ function supabaseAdmin() {
 
 interface WhatsAppMessage {
   id: string
-  from: string
+  from?: string
+  from_user_id?: string
   timestamp: string
   type: string
   text?: { body: string }
@@ -57,6 +59,16 @@ interface WhatsAppMessage {
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
   }
+  /**
+   * Template quick-reply tap. Meta still delivers these as `type: "button"`
+   * (distinct from interactive `button_reply`). `text` is the label shown
+   * on the phone; `payload` is the developer-defined value sent with the
+   * template button component.
+   */
+  button?: {
+    text: string
+    payload: string
+  }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
 }
@@ -71,15 +83,18 @@ interface WhatsAppWebhookEntry {
         phone_number_id: string
       }
       contacts?: Array<{
-        profile: { name: string }
-        wa_id: string
+        profile?: { name?: string; username?: string }
+        wa_id?: string
+        user_id?: string
+        parent_user_id?: string
       }>
       messages?: WhatsAppMessage[]
       statuses?: Array<{
         id: string
         status: string
         timestamp: string
-        recipient_id: string
+        recipient_id?: string
+        recipient_user_id?: string
       }>
     }
     field: string
@@ -242,8 +257,9 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
         }
       }
 
-      // Handle incoming messages
-      if (!value.messages || !value.contacts) continue
+      // Handle incoming messages. `contacts` may be omitted on some
+      // BSUID payloads — never require phone/wa_id to be present.
+      if (!value.messages) continue
 
       const phoneNumberId = value.metadata.phone_number_id
 
@@ -288,7 +304,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
-        const contact = value.contacts[i] || value.contacts[0]
+        const contact = value.contacts?.[i] || value.contacts?.[0]
 
         await processMessage(
           message,
@@ -353,7 +369,8 @@ async function handleStatusUpdate(status: {
   id: string
   status: string
   timestamp: string
-  recipient_id: string
+  recipient_id?: string
+  recipient_user_id?: string
 }) {
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
   //    already match the CHECK constraint on messages.status. No
@@ -559,7 +576,12 @@ async function handleReaction(
 
 async function processMessage(
   message: WhatsAppMessage,
-  contact: { profile: { name: string }; wa_id: string },
+  contact: {
+    profile?: { name?: string; username?: string }
+    wa_id?: string
+    user_id?: string
+    parent_user_id?: string
+  } | undefined,
   // Tenancy. Resolved from the matched whatsapp_config row; every
   // contact / conversation / message row created downstream is
   // stamped with this so any member of the account can see it.
@@ -570,18 +592,47 @@ async function processMessage(
   configOwnerUserId: string,
   accessToken: string
 ) {
-  const senderPhone = normalizePhone(message.from)
-  const contactName = contact.profile.name
+  const identity = resolveInboundIdentity({
+    from: message.from,
+    waId: contact?.wa_id,
+    userId: contact?.user_id,
+    fromUserId: message.from_user_id,
+    username: contact?.profile?.username,
+    messageId: message.id,
+  })
+  const contactName =
+    contact?.profile?.name ||
+    identity.username ||
+    identity.phone ||
+    identity.waId ||
+    identity.bsuid ||
+    'Unknown'
 
-  // Find or create contact
-  const contactOutcome = await findOrCreateContact(
+  if (!identity.phone && !identity.waId && !identity.bsuid) {
+    console.error(
+      '[webhook] inbound message has no phone, wa_id, or bsuid; dropping',
+      { whatsapp_message_id: message.id },
+    )
+    return
+  }
+
+  const contactOutcome = await upsertWhatsAppContact(supabaseAdmin(), {
     accountId,
-    configOwnerUserId,
-    senderPhone,
-    contactName
-  )
+    ownerUserId: configOwnerUserId,
+    identity,
+    name: contactName,
+  })
   if (!contactOutcome) return
   const contactRecord = contactOutcome.contact
+
+  console.info('[webhook] inbound identity', {
+    identifier_type: identity.identifierType,
+    contact_id: contactRecord.id,
+    bsuid: identity.bsuid,
+    has_phone: Boolean(identity.phone),
+    has_username: Boolean(identity.username),
+    whatsapp_message_id: message.id,
+  })
 
   // Find or create conversation
   const convResult = await findOrCreateConversation(
@@ -645,6 +696,9 @@ async function processMessage(
   //   text, image, document, audio, video, location, template, interactive
   // Map incoming WhatsApp types that aren't in that list to the closest
   // allowed value so the INSERT doesn't fail with a constraint error.
+  // Template quick-reply taps arrive as Meta type `button` — store them
+  // as `interactive` so the inbox bubble shows the same "button reply"
+  // affordance as interactive button_reply / list_reply taps.
   const ALLOWED_CONTENT_TYPES = new Set([
     'text', 'image', 'document', 'audio', 'video',
     'location', 'template', 'interactive',
@@ -653,7 +707,9 @@ async function processMessage(
     ? message.type
     : message.type === 'sticker'
       ? 'image'   // stickers are images
-      : 'text'    // reaction, unknown → text fallback
+      : message.type === 'button'
+        ? 'interactive'
+        : 'text'  // reaction, unknown → text fallback
 
   // Determine whether this is the contact's very first inbound message
   // BEFORE we insert, so the count is accurate. Covers the case where
@@ -668,6 +724,7 @@ async function processMessage(
 
   const { error: msgError } = await supabaseAdmin().from('messages').insert({
     conversation_id: conversation.id,
+    contact_id: contactRecord.id,
     sender_type: 'customer',
     content_type: contentType,
     content_text: contentText,
@@ -676,10 +733,13 @@ async function processMessage(
     status: 'delivered',
     created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
     reply_to_message_id: replyToInternalId,
-    // Only populated for content_type='interactive'. Migration 010 added
-    // the column; null for every other content_type so existing inserts
-    // behave identically.
+    // Populated for interactive button/list taps and template quick-reply
+    // taps (Meta type `button`, stored as content_type='interactive').
+    // Migration 010 added the column; null for every other content_type.
     interactive_reply_id: interactiveReplyId,
+    sender_identifier:
+      identity.bsuid || identity.phone || identity.waId || message.from || null,
+    sender_identifier_type: identity.identifierType,
   })
 
   if (msgError) {
@@ -963,82 +1023,23 @@ async function parseMessageContent(
       return { ...empty, contentText: '[Interactive reply]' }
     }
 
+    case 'button': {
+      // Template quick-reply tap. Same semantic as interactive
+      // button_reply, different Meta envelope — see parseTemplateButtonReply.
+      const parsed = parseTemplateButtonReply(message.button)
+      return {
+        ...empty,
+        contentText: parsed.contentText,
+        interactiveReplyId: parsed.interactiveReplyId,
+      }
+    }
+
     default:
       return {
         ...empty,
         contentText: `[Unsupported message type: ${message.type}]`,
       }
   }
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ContactRow = any
-
-interface ContactOutcome {
-  contact: ContactRow
-  /** True when this call created the row; drives new_contact_created
-   *  automation dispatch in processMessage. */
-  wasCreated: boolean
-}
-
-async function findOrCreateContact(
-  accountId: string,
-  configOwnerUserId: string,
-  phone: string,
-  name: string
-): Promise<ContactOutcome | null> {
-  // Find an existing contact for this account by phone. The shared
-  // helper pre-filters in SQL by the last-8-digit suffix (so we don't
-  // pull every contact on every inbound message) then applies the
-  // strict `phonesMatch` in JS on the small candidate set. The same
-  // helper backs the manual contact form and CSV import, so all three
-  // paths agree on what "same number" means (issue #212).
-  const existingContact = await findExistingContact(
-    supabaseAdmin(),
-    accountId,
-    phone,
-  )
-
-  if (existingContact) {
-    // Update name if it changed
-    if (name && name !== existingContact.name) {
-      await supabaseAdmin()
-        .from('contacts')
-        .update({ name, updated_at: new Date().toISOString() })
-        .eq('id', existingContact.id)
-    }
-    return { contact: existingContact, wasCreated: false }
-  }
-
-  // Create new contact. account_id is the tenancy column;
-  // user_id is the NOT NULL FK audit column (no inbound message
-  // has a single "user who created" it — we attribute to the
-  // WhatsApp config owner as a stable default).
-  const { data: newContact, error: createError } = await supabaseAdmin()
-    .from('contacts')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      phone,
-      name: name || phone,
-    })
-    .select()
-    .single()
-
-  if (createError) {
-    // Lost a race: a concurrent inbound delivery (or another path)
-    // created this contact between our lookup and insert, and the
-    // unique index (migration 022) rejected the duplicate. Re-resolve
-    // the existing row instead of dropping the message.
-    if (isUniqueViolation(createError)) {
-      const raced = await findExistingContact(supabaseAdmin(), accountId, phone)
-      if (raced) return { contact: raced, wasCreated: false }
-    }
-    console.error('Error creating contact:', createError)
-    return null
-  }
-
-  return { contact: newContact, wasCreated: true }
 }
 
 async function findOrCreateConversation(

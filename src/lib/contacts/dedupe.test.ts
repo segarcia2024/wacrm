@@ -3,10 +3,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   dedupeByPhone,
   findExistingContact,
+  findExistingContactByIdentity,
+  findExistingContactByWaId,
   isExactMatch,
   isUniqueViolation,
   normalizeKey,
+  upsertWhatsAppContact,
+  type ExistingContact,
 } from "./dedupe";
+import type { InboundIdentity } from "@/lib/whatsapp/wa-identity";
 
 describe("normalizeKey", () => {
   it("strips every non-digit", () => {
@@ -95,3 +100,288 @@ describe("findExistingContact", () => {
     expect(await findExistingContact(db, "acct", "   ")).toBeNull();
   });
 });
+
+describe("findExistingContactByWaId", () => {
+  function stubWaDb(
+    row: { id: string; phone: string; wa_id: string } | null,
+  ): SupabaseClient {
+    const builder = {
+      select: () => builder,
+      eq: () => builder,
+      maybeSingle: () => Promise.resolve({ data: row, error: null }),
+    };
+    return { from: () => builder } as unknown as SupabaseClient;
+  }
+
+  it("matches a LID contact", async () => {
+    const db = stubWaDb({
+      id: "c1",
+      phone: "",
+      wa_id: "CO.2717513161983753",
+    });
+    const hit = await findExistingContactByWaId(
+      db,
+      "acct",
+      "CO.2717513161983753",
+    );
+    expect(hit?.id).toBe("c1");
+  });
+
+  it("returns null when missing", async () => {
+    const db = stubWaDb(null);
+    expect(
+      await findExistingContactByWaId(db, "acct", "CO.999"),
+    ).toBeNull();
+  });
+});
+
+describe("findExistingContactByIdentity", () => {
+  it("falls back to wa_id when phone is empty", async () => {
+    const builder = {
+      select: () => builder,
+      eq: () => builder,
+      like: () => Promise.resolve({ data: [], error: null }),
+      maybeSingle: () =>
+        Promise.resolve({
+          data: { id: "lid-1", phone: "", wa_id: "CO.2717513161983753" },
+          error: null,
+        }),
+    };
+    const db = { from: () => builder } as unknown as SupabaseClient;
+    const hit = await findExistingContactByIdentity(
+      db,
+      "acct",
+      "",
+      "CO.2717513161983753",
+    );
+    expect(hit?.id).toBe("lid-1");
+  });
+});
+
+function memoryContacts(initial: ExistingContact[] = []) {
+  const rows = initial.map((r) => ({ ...r }));
+  let seq = 1;
+  const from = () => {
+    const eqs: { col: string; val: string }[] = [];
+    const builder: {
+      select: () => unknown;
+      eq: (col: string, val: string) => unknown;
+      like: (col: string, val: string) => Promise<{ data: ExistingContact[]; error: null }>;
+      maybeSingle: () => Promise<{ data: ExistingContact | null; error: null }>;
+      insert: (data: Record<string, unknown>) => {
+        select: () => {
+          single: () => Promise<{ data: ExistingContact; error: null }>;
+        };
+      };
+      update: (patch: Record<string, unknown>) => {
+        eq: (col: string, id: string) => Promise<{ error: null }>;
+      };
+    } = {
+      select: () => builder,
+      eq: (col, val) => {
+        eqs.push({ col, val });
+        return builder;
+      },
+      like: (_col, val) => {
+        const suffix = val.replace(/%/g, "");
+        return Promise.resolve({
+          data: rows.filter((r) => (r.phone ?? "").includes(suffix)),
+          error: null,
+        });
+      },
+      maybeSingle: () => {
+        const bsuid = eqs.find((e) => e.col === "bsuid")?.val;
+        const wa = eqs.find((e) => e.col === "wa_id")?.val;
+        const hit = rows.find((r) =>
+          bsuid ? r.bsuid === bsuid : wa ? r.wa_id === wa : false,
+        );
+        return Promise.resolve({ data: hit ?? null, error: null });
+      },
+      insert: (data) => {
+        const row = { id: `c${seq++}`, ...data } as ExistingContact;
+        rows.push(row);
+        return {
+          select: () => ({
+            single: () => Promise.resolve({ data: row, error: null }),
+          }),
+        };
+      },
+      update: (patch) => ({
+        eq: (_col, id) => {
+          const row = rows.find((r) => r.id === id);
+          if (row) Object.assign(row, patch);
+          return Promise.resolve({ error: null });
+        },
+      }),
+    };
+    return builder;
+  };
+  return { db: { from } as unknown as SupabaseClient, rows };
+}
+
+const owner = "user-1";
+const account = "acct";
+
+function identity(partial: Partial<InboundIdentity>): InboundIdentity {
+  return {
+    phone: "",
+    waId: null,
+    bsuid: null,
+    username: null,
+    identifierType: "unknown",
+    ...partial,
+  };
+}
+
+describe("upsertWhatsAppContact", () => {
+  it("caso 1 — crea contacto tradicional solo con teléfono", async () => {
+    const { db, rows } = memoryContacts();
+    const result = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Juan",
+      identity: identity({
+        phone: "573001234567",
+        waId: "573001234567",
+        identifierType: "phone",
+      }),
+    });
+    expect(result?.wasCreated).toBe(true);
+    expect(result?.contact.phone).toBe("573001234567");
+    expect(result?.contact.bsuid).toBeNull();
+    expect(rows).toHaveLength(1);
+  });
+
+  it("caso 2 — crea contacto sin teléfono con username + bsuid", async () => {
+    const { db, rows } = memoryContacts();
+    const result = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Sergio",
+      identity: identity({
+        bsuid: "CO.ABC123DEF456",
+        waId: "CO.ABC123DEF456",
+        username: "sergio",
+        identifierType: "bsuid",
+      }),
+    });
+    expect(result?.wasCreated).toBe(true);
+    expect(result?.contact.phone).toBeNull();
+    expect(result?.contact.bsuid).toBe("CO.ABC123DEF456");
+    expect(result?.contact.username).toBe("sergio");
+    expect(rows).toHaveLength(1);
+  });
+
+  it("caso 3 — híbrido guarda phone, username y bsuid", async () => {
+    const { db } = memoryContacts();
+    const result = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Maria",
+      identity: identity({
+        phone: "573001234567",
+        waId: "573001234567",
+        bsuid: "CO.ABC123DEF456",
+        username: "maria88",
+        identifierType: "bsuid",
+      }),
+    });
+    expect(result?.contact.phone).toBe("573001234567");
+    expect(result?.contact.bsuid).toBe("CO.ABC123DEF456");
+    expect(result?.contact.username).toBe("maria88");
+  });
+
+  it("caso 4 — el teléfono posterior actualiza el mismo contacto BSUID", async () => {
+    const { db, rows } = memoryContacts();
+    const first = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Sergio",
+      identity: identity({
+        bsuid: "CO.ABC123DEF456",
+        waId: "CO.ABC123DEF456",
+        username: "sergio",
+        identifierType: "bsuid",
+      }),
+    });
+    const second = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Sergio",
+      identity: identity({
+        phone: "573001234567",
+        waId: "573001234567",
+        bsuid: "CO.ABC123DEF456",
+        username: "sergio",
+        identifierType: "bsuid",
+      }),
+    });
+    expect(second?.wasCreated).toBe(false);
+    expect(second?.contact.id).toBe(first?.contact.id);
+    expect(second?.contact.phone).toBe("573001234567");
+    expect(rows).toHaveLength(1);
+  });
+
+  it("caso 5 — dos webhooks del mismo usuario no duplican", async () => {
+    const { db, rows } = memoryContacts();
+    const payload = identity({
+      phone: "573001234567",
+      waId: "573001234567",
+      identifierType: "phone",
+    });
+    const a = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Juan",
+      identity: payload,
+    });
+    const b = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Juan",
+      identity: payload,
+    });
+    expect(a?.contact.id).toBe(b?.contact.id);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("caso 6 — contacto sin teléfono tiene id interno usable para conversación", async () => {
+    const { db } = memoryContacts();
+    const result = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Maria",
+      identity: identity({
+        bsuid: "CO.YYYYYYYYYYYY",
+        waId: "CO.YYYYYYYYYYYY",
+        identifierType: "bsuid",
+      }),
+    });
+    expect(result?.contact.id).toBeTruthy();
+    expect(result?.contact.phone).toBeNull();
+  });
+
+  it("caso 7 — contacto antiguo con teléfono sigue resolviéndose por phone", async () => {
+    const { db } = memoryContacts([
+      {
+        id: "legacy-1",
+        phone: "573001234567",
+        wa_id: "573001234567",
+        name: "Legacy",
+      },
+    ]);
+    const result = await upsertWhatsAppContact(db, {
+      accountId: account,
+      ownerUserId: owner,
+      name: "Legacy",
+      identity: identity({
+        phone: "573001234567",
+        waId: "573001234567",
+        identifierType: "phone",
+      }),
+    });
+    expect(result?.wasCreated).toBe(false);
+    expect(result?.contact.id).toBe("legacy-1");
+  });
+});
+

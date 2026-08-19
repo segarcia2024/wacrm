@@ -4,6 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { formatCurrency } from '@/lib/currency';
+import {
+  contactPrimaryLabel,
+  contactSecondaryLabel,
+  formatWhatsAppUsername,
+  visiblePhone,
+} from '@/lib/contacts/display';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactTag, ContactNote, CustomField, ContactCustomValue, Deal, MessageTemplate } from '@/types';
 import {
@@ -191,23 +197,26 @@ export function ContactDetailView({
 
   async function copyPhone() {
     if (!contact) return;
-    await navigator.clipboard.writeText(contact.phone);
+    const text =
+      visiblePhone(contact.phone) ||
+      formatWhatsAppUsername(contact.username) ||
+      contact.bsuid ||
+      '';
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
     setCopiedPhone(true);
     setTimeout(() => setCopiedPhone(false), 2000);
   }
 
   async function saveDetails() {
-    if (!contactId || !editPhone.trim()) {
-      toast.error(t('toastPhoneRequired'));
-      return;
-    }
+    if (!contactId) return;
 
     setSavingDetails(true);
     const { error } = await supabase
       .from('contacts')
       .update({
         name: editName.trim() || null,
-        phone: editPhone.trim(),
+        phone: editPhone.trim() || null,
         email: editEmail.trim() || null,
         company: editCompany.trim() || null,
         updated_at: new Date().toISOString(),
@@ -405,7 +414,7 @@ export function ContactDetailView({
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <SheetTitle className="text-popover-foreground truncate">
-                    {contact.name || t('unnamed')}
+                    {contactPrimaryLabel(contact, t('unnamed'))}
                   </SheetTitle>
                   <SheetDescription className="text-muted-foreground text-xs mt-0.5">
                     {t('contactDetailsDesc')}
@@ -416,7 +425,10 @@ export function ContactDetailView({
                       className="flex items-center gap-1 hover:text-primary transition-colors cursor-pointer"
                     >
                       <Phone className="size-3" />
-                      {contact.phone}
+                      {contactSecondaryLabel(contact) ||
+                        visiblePhone(contact.phone) ||
+                        formatWhatsAppUsername(contact.username) ||
+                        t('phoneNotShared')}
                       {copiedPhone ? (
                         <Check className="size-3 text-primary" />
                       ) : (

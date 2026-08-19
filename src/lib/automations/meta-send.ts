@@ -6,11 +6,14 @@ import {
 } from '@/lib/flows/meta-send'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
-  sanitizePhoneForMeta,
-  isValidE164,
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
+import {
+  isPhoneRecipient,
+  resolveWhatsAppRecipient,
+} from '@/lib/whatsapp/wa-identity'
+import { toMetaMessageAddress } from '@/lib/whatsapp/recipient-resolver'
 import { supabaseAdmin } from './admin-client'
 
 // ------------------------------------------------------------
@@ -118,18 +121,19 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   // new tenancy column.
   const { data: contact, error: contactErr } = await db
     .from('contacts')
-    .select('id, phone')
+    .select('id, phone, wa_id, bsuid, username')
     .eq('id', input.contactId)
     .eq('account_id', input.accountId)
     .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  if (contactErr || !contact) {
     throw new Error('contact not found for this account')
   }
 
-  const sanitized = sanitizePhoneForMeta(contact.phone)
-  if (!isValidE164(sanitized)) {
-    throw new Error(`contact phone invalid: ${contact.phone}`)
+  const resolved = resolveWhatsAppRecipient(contact)
+  if (!resolved) {
+    throw new Error('contact has no phone or WhatsApp id')
   }
+  const sanitized = resolved.value
 
   const { data: config, error: configErr } = await db
     .from('whatsapp_config')
@@ -143,11 +147,12 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   const accessToken = decrypt(config.access_token)
 
   const attempt = async (phone: string): Promise<string> => {
+    const address = toMetaMessageAddress(resolved, phone)
     if (input.kind === 'template') {
       const r = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,
         accessToken,
-        to: phone,
+        ...address,
         templateName: input.templateName,
         language: input.language,
         params: input.params,
@@ -157,7 +162,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     const r = await sendTextMessage({
       phoneNumberId: config.phone_number_id,
       accessToken,
-      to: phone,
+      ...address,
       text: input.text,
     })
     return r.messageId
@@ -165,8 +170,9 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
 
   // Same phone-variant retry as /api/whatsapp/send — Meta sandbox and
   // numbers registered with/without a trunk 0 both require this to
-  // reliably land a message.
-  const variants = phoneVariants(sanitized)
+  // reliably land a message. BSUID/LID skip variant expansion.
+  const usePhoneVariants = resolved.type === 'phone' && isPhoneRecipient(sanitized)
+  const variants = usePhoneVariants ? phoneVariants(sanitized) : [sanitized]
   let workingPhone = sanitized
   let waMessageId = ''
   let lastError: unknown = null
@@ -184,7 +190,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   }
   if (lastError) throw lastError
 
-  if (workingPhone !== sanitized) {
+  if (usePhoneVariants && workingPhone !== sanitized) {
     await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
   }
 
