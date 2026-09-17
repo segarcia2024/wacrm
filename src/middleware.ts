@@ -1,7 +1,10 @@
 import { createServerClient } from '@supabase/ssr'
+
+import type { Database } from '@/types/database'
 import { NextResponse, type NextRequest } from 'next/server'
 
 import { isSafeRedirectPath } from '@/lib/auth/safe-redirect'
+import { timedFetch } from '@/lib/supabase/timed-fetch'
 import {
   clearSupabaseAuthCookies,
   hasSupabaseAuthCookies,
@@ -17,12 +20,23 @@ function resolvePostAuthRedirect(request: NextRequest): string {
 }
 
 export async function middleware(request: NextRequest) {
+  const isAuthLoginPost =
+    request.method === 'POST' && request.nextUrl.pathname === '/api/auth/login'
+
+  // Login writes its own Set-Cookie. Creating a supabase client or
+  // clearing stale tokens here produces middleware Set-Cookie headers
+  // that win the merge and the new session never reaches the browser.
+  if (isAuthLoginPost) {
+    return NextResponse.next()
+  }
+
   let supabaseResponse = NextResponse.next({ request })
 
-  const supabase = createServerClient(
+  const supabase = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      global: { fetch: timedFetch },
       cookies: {
         getAll() {
           return request.cookies.getAll()
@@ -78,12 +92,34 @@ export async function middleware(request: NextRequest) {
     request.method === 'POST' &&
     (request.headers.has('next-action') || request.headers.has('Next-Action'))
 
-  const isAuthLoginPost =
-    request.method === 'POST' && request.nextUrl.pathname === '/api/auth/login'
-
-  // Never redirect Server Actions or the login API — redirects break the POST.
-  if (isServerAction || isAuthLoginPost) {
+  // Never redirect Server Actions — redirects break the POST.
+  if (isServerAction) {
     return supabaseResponse
+  }
+
+  // API routes — deny by default for unauthenticated callers.
+  // Allowlist: public auth, Meta webhook, invitation peek, public REST
+  // (API-key auth), and cron endpoints (shared secret).
+  // Session-protected APIs still re-check getUser()/requireRole in-route;
+  // this layer stops anonymous probing of private handlers.
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    const path = request.nextUrl.pathname
+    const isPublicApi =
+      path === '/api/health' ||
+      path === '/api/auth/login' ||
+      path === '/api/whatsapp/webhook' ||
+      path === '/api/billing/events' ||
+      path.startsWith('/api/v1/') ||
+      path === '/api/automations/cron' ||
+      path === '/api/flows/cron' ||
+      path === '/api/appointments/cron' ||
+      /^\/api\/invitations\/[^/]+\/peek$/.test(path)
+
+    if (!isPublicApi && !user) {
+      return withRefreshedCookies(
+        NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+      )
+    }
   }
 
   // Root — CRM-only MVP (no public landing). Signed-in users go to the
@@ -126,21 +162,30 @@ export async function middleware(request: NextRequest) {
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // Protected pages - redirect to login if not authenticated
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/agenda', '/broadcasts', '/automations', '/settings', '/billing']
+  // Protected pages - redirect to login if not authenticated.
+  // Keep in sync with `(dashboard)` routes; layout.tsx also re-checks
+  // getUser(), but middleware must not leave gaps that flash UI or
+  // leak route existence to unauthenticated crawlers.
+  const protectedPaths = [
+    '/dashboard',
+    '/inbox',
+    '/contacts',
+    '/pipelines',
+    '/agenda',
+    '/broadcasts',
+    '/automations',
+    '/flows',
+    '/inventory',
+    '/notifications',
+    '/agents',
+    '/settings',
+    '/billing',
+  ]
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     url.searchParams.set('redirect', request.nextUrl.pathname)
     return withRefreshedCookies(NextResponse.redirect(url))
-  }
-
-  // API routes that need auth (not webhooks)
-  if (!user && request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
-      !request.nextUrl.pathname.includes('/webhook')) {
-    return withRefreshedCookies(
-      NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    )
   }
 
   return supabaseResponse

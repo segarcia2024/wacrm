@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from '@/lib/rate-limit'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
@@ -124,31 +129,9 @@ function extractSampleValues(
 
 export async function POST() {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // Resolve the caller's account_id — both whatsapp_config and
-    // the message_templates we sync into are account-scoped.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
-    }
+    const { supabase, userId, accountId } = await requireRole('admin')
+    const limit = await checkRateLimit(`templates:sync:${userId}`, RATE_LIMITS.adminAction)
+    if (!limit.success) return rateLimitResponse(limit)
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
@@ -199,7 +182,11 @@ export async function POST() {
         } catch {
           // response wasn't JSON — keep the fallback
         }
-        return NextResponse.json({ error: metaErr }, { status: 502 })
+        console.error('[templates/sync] Meta fetch failed:', metaErr)
+        return NextResponse.json(
+          { error: 'Failed to sync templates from Meta.' },
+          { status: 502 },
+        )
       }
 
       const metaBody: {
@@ -237,7 +224,7 @@ export async function POST() {
         // route. account_id is NOT NULL on message_templates
         // post-017, so an INSERT without it errors.
         account_id: accountId,
-        user_id: user.id,
+        user_id: userId,
         name: t.name,
         category: normalizeCategory(t.category),
         language: t.language,
@@ -310,12 +297,11 @@ export async function POST() {
       truncated: pageCount >= PAGE_CAP && nextUrl !== null,
     })
   } catch (error) {
+    const mapped = toErrorResponse(error)
+    if (mapped.status === 401 || mapped.status === 403) return mapped
     console.error('Error syncing WhatsApp templates:', error)
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : 'Failed to sync templates',
-      },
+      { error: 'Failed to sync templates' },
       { status: 500 },
     )
   }

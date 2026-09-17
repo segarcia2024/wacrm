@@ -17,13 +17,10 @@ export interface Profile {
   email: string;
   avatar_url?: string;
   /**
-   * Legacy free-form role column from migration 001. Never read
-   * by the app since 017_account_sharing.sql introduced the typed
-   * `account_role` enum. Flagged for removal in a later cleanup
-   * migration — kept on the type so existing destructures don't
-   * break.
+   * @deprecated Unused since 017. The app only reads `account_role`.
+   * Optional so callers do not keep selecting `profiles.role`.
    */
-  role: string;
+  role?: string;
   /**
    * Opted-in beta feature keys for this account. The column survives
    * for future beta gates; no current feature reads it (Flows was
@@ -188,6 +185,8 @@ export interface Conversation {
   user_id: string;
   contact_id: string;
   status: ConversationStatus;
+  /** CRM 1.1 operational state; null = derive from status / last message */
+  operational_status?: ConversationOperationalStatus | null;
   assigned_agent_id?: string;
   last_message_text?: string;
   last_message_at?: string;
@@ -218,6 +217,15 @@ export interface Conversation {
   ai_autoreply_disabled?: boolean;
   ai_reply_count?: number;
   ai_handoff_summary?: string | null;
+  /** Hydrated when crm11_inbox_ops: open deal next action / stage */
+  openDealSummary?: {
+    id: string;
+    stageName?: string | null;
+    nextAction?: string | null;
+    nextActionAt?: string | null;
+    assigneeName?: string | null;
+  } | null;
+  slaBreached?: boolean;
 }
 
 // ============================================================
@@ -315,6 +323,8 @@ export interface WhatsAppConfig {
   waba_id?: string;
   access_token: string;
   verify_token?: string;
+  /** SHA-256 of the plaintext verify token (migration 051). */
+  verify_token_hash?: string | null;
   status: 'connected' | 'disconnected';
   connected_at?: string;
   /**
@@ -381,6 +391,8 @@ export interface Pipeline {
   id: string;
   user_id: string;
   name: string;
+  /** 1 = legacy; 2 = CRM 1.1 stages for new deals */
+  funnel_version?: number;
   created_at: string;
 }
 
@@ -390,6 +402,8 @@ export interface PipelineStage {
   name: string;
   position: number;
   color: string;
+  /** CRM 1.1: open | won | lost — does not move deals */
+  outcome?: 'open' | 'won' | 'lost';
   created_at: string;
 }
 
@@ -404,8 +418,10 @@ export type AppointmentType =
 
 export type AppointmentStatus =
   | 'scheduled'
-  | 'completed'
+  | 'confirmed'
+  | 'rescheduled'
   | 'cancelled'
+  | 'completed'
   | 'no_show';
 
 export interface Appointment {
@@ -421,6 +437,10 @@ export interface Appointment {
   starts_at: string;
   duration_minutes: number;
   location?: string | null;
+  location_id?: string | null;
+  vehicle_id?: string | null;
+  result?: string | null;
+  next_action?: string | null;
   notes?: string | null;
   status: AppointmentStatus;
   reminder_enabled: boolean;
@@ -434,6 +454,14 @@ export interface Appointment {
 }
 
 export type VehicleStatus = "available" | "reserved" | "sold";
+
+export type ConversationOperationalStatus =
+  | 'new'
+  | 'open'
+  | 'waiting_customer'
+  | 'waiting_team'
+  | 'resolved'
+  | 'archived';
 
 export interface Deal {
   id: string;
@@ -449,6 +477,7 @@ export interface Deal {
   assigned_to?: string;
   /** Optional link to inventory vehicle (migration 046). */
   vehicle_id?: string | null;
+  location_id?: string | null;
   title: string;
   /** Deal value in whole Colombian Pesos (COP). */
   value: number;
@@ -457,6 +486,16 @@ export interface Deal {
   notes?: string;
   expected_close_date?: string;
   status?: DealStatus;
+  source?: string | null;
+  payment_method?: string | null;
+  budget?: number | null;
+  purchase_timeline?: string | null;
+  trade_in?: boolean | null;
+  next_action?: string | null;
+  next_action_at?: string | null;
+  loss_reason?: string | null;
+  closed_at?: string | null;
+  observations?: string | null;
   created_at: string;
   updated_at?: string;
   contact?: Contact;
@@ -712,6 +751,13 @@ export interface Automation {
   is_active: boolean;
   execution_count: number;
   last_executed_at?: string | null;
+  /** CRM 1.1 lifecycle observability */
+  lifecycle_status?: 'draft' | 'test' | 'active' | 'paused' | 'error';
+  version?: number;
+  last_error?: string | null;
+  last_run_at?: string | null;
+  success_count?: number;
+  error_count?: number;
   created_at: string;
   updated_at: string;
 }

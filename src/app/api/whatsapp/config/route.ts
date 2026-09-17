@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { hashVerifyToken } from '@/lib/whatsapp/verify-token-hash'
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from '@/lib/rate-limit'
 import {
   registerPhoneNumber,
   subscribeWabaToApp,
@@ -31,21 +38,6 @@ async function resolveAccountId(
   return data.account_id as string
 }
 
-// Lazy-initialised service-role client. We need it to detect a
-// phone_number_id already claimed by a *different* user — under RLS,
-// the user's own session can't see other users' rows, so the conflict
-// would be invisible without the service role.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
-function supabaseAdmin() {
-  if (!_adminClient) {
-    _adminClient = createAdminClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-  }
-  return _adminClient
-}
 
 /**
  * GET /api/whatsapp/config
@@ -165,26 +157,14 @@ export async function GET() {
  */
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
+    const { supabase, userId, accountId } = await requireRole('admin')
+    const limit = await checkRateLimit(`whatsapp:config:${userId}`, RATE_LIMITS.adminAction)
+    if (!limit.success) return rateLimitResponse(limit)
 
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const body = await request.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     }
-
-    const accountId = await resolveAccountId(supabase, user.id)
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
-    }
-
-    const body = await request.json()
     const { phone_number_id, waba_id, access_token, verify_token, pin } = body
 
     if (!access_token || !phone_number_id) {
@@ -257,6 +237,7 @@ export async function POST(request: Request) {
     try {
       encryptedAccessToken = encrypt(access_token)
       encryptedVerifyToken = verify_token ? encrypt(verify_token) : null
+      // verify_token may be empty when the dealer only updates credentials.
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown encryption error'
       console.error('Encryption failed:', message)
@@ -358,6 +339,7 @@ export async function POST(request: Request) {
       waba_id: waba_id || null,
       access_token: encryptedAccessToken,
       verify_token: encryptedVerifyToken,
+      verify_token_hash: verify_token ? hashVerifyToken(verify_token) : null,
       status: registrationError ? 'disconnected' : 'connected',
       connected_at: registrationError ? null : new Date().toISOString(),
       registered_at: registrationError ? null : registeredAt,
@@ -388,7 +370,7 @@ export async function POST(request: Request) {
         .from('whatsapp_config')
         .insert({
           account_id: accountId,
-          user_id: user.id,
+          user_id: userId,
           ...baseRow,
         })
 
@@ -426,6 +408,8 @@ export async function POST(request: Request) {
       phone_info: phoneInfo,
     })
   } catch (error) {
+    const mapped = toErrorResponse(error)
+    if (mapped.status === 401 || mapped.status === 403) return mapped
     console.error('Error in WhatsApp config POST:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
@@ -440,24 +424,7 @@ export async function POST(request: Request) {
  */
 export async function DELETE() {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const accountId = await resolveAccountId(supabase, user.id)
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
-    }
+    const { supabase, accountId } = await requireRole('admin')
 
     const { error: deleteError } = await supabase
       .from('whatsapp_config')
@@ -474,6 +441,8 @@ export async function DELETE() {
 
     return NextResponse.json({ success: true })
   } catch (error) {
+    const mapped = toErrorResponse(error)
+    if (mapped.status === 401 || mapped.status === 403) return mapped
     console.error('Error in WhatsApp config DELETE:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }

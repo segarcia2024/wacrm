@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from '@/lib/rate-limit'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   deleteMessageTemplate,
@@ -11,6 +16,7 @@ import {
 } from '@/lib/whatsapp/template-validators'
 import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components'
 import { ensureImageHeaderHandle } from '@/lib/whatsapp/template-header-handle'
+import { isWhatsappTemplatesDryRun } from '@/lib/whatsapp/templates-dry-run'
 
 /**
  * Per-template lifecycle endpoint.
@@ -38,10 +44,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function isDryRun(): boolean {
-  return (
-    process.env.WHATSAPP_TEMPLATES_DRY_RUN === 'true' ||
-    process.env.WHATSAPP_TEMPLATES_DRY_RUN === '1'
-  )
+  return isWhatsappTemplatesDryRun()
 }
 
 export async function PATCH(
@@ -56,29 +59,9 @@ export async function PATCH(
         { status: 400 },
       )
     }
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // Resolve the caller's account_id so template + whatsapp_config
-    // lookups work for teammates who didn't author the row.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
-    }
+    const { supabase, userId, accountId } = await requireRole('admin')
+    const limit = await checkRateLimit(`templates:edit:${userId}`, RATE_LIMITS.adminAction)
+    if (!limit.success) return rateLimitResponse(limit)
 
     let payload: TemplatePayload
     try {
@@ -171,6 +154,7 @@ export async function PATCH(
         })
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Meta edit failed.'
+        console.error('[templates/PATCH] Meta edit failed:', message)
         await supabase
           .from('message_templates')
           .update({
@@ -178,7 +162,10 @@ export async function PATCH(
             last_submitted_at: new Date().toISOString(),
           })
           .eq('id', id)
-        return NextResponse.json({ error: message }, { status: 502 })
+        return NextResponse.json(
+          { error: 'Failed to update template on Meta.' },
+          { status: 502 },
+        )
       }
     }
 
@@ -205,9 +192,11 @@ export async function PATCH(
       .single()
 
     if (updErr) {
+      console.error('[templates/PATCH] local save failed:', updErr.message)
       return NextResponse.json(
         {
-          error: `Edited on Meta but failed to save locally: ${updErr.message}. Run "Sync from Meta" to recover.`,
+          error:
+            'Edited on Meta but failed to save locally. Run "Sync from Meta" to recover.',
         },
         { status: 500 },
       )
@@ -219,12 +208,11 @@ export async function PATCH(
       dry_run: isDryRun(),
     })
   } catch (error) {
+    const mapped = toErrorResponse(error)
+    if (mapped.status === 401 || mapped.status === 403) return mapped
     console.error('Error editing template:', error)
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : 'Failed to edit template.',
-      },
+      { error: 'Failed to edit template.' },
       { status: 500 },
     )
   }
@@ -242,30 +230,9 @@ export async function DELETE(
         { status: 400 },
       )
     }
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // Same account-scoping rationale as the PATCH handler above —
-    // teammates need to be able to operate on shared templates +
-    // the shared whatsapp_config.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
-    }
+    const { supabase, userId, accountId } = await requireRole('admin')
+    const limit = await checkRateLimit(`templates:delete:${userId}`, RATE_LIMITS.adminAction)
+    if (!limit.success) return rateLimitResponse(limit)
 
     const { data: existing, error: lookupErr } = await supabase
       .from('message_templates')
@@ -298,8 +265,11 @@ export async function DELETE(
           metaTemplateId: existing.meta_template_id,
         })
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Meta delete failed.'
-        return NextResponse.json({ error: message }, { status: 502 })
+        console.error('[templates/DELETE] Meta delete failed:', e)
+        return NextResponse.json(
+          { error: 'Failed to delete template on Meta.' },
+          { status: 502 },
+        )
       }
     }
 
@@ -308,9 +278,11 @@ export async function DELETE(
       .delete()
       .eq('id', id)
     if (delErr) {
+      console.error('[templates/DELETE] local delete failed:', delErr.message)
       return NextResponse.json(
         {
-          error: `Deleted on Meta but failed to delete locally: ${delErr.message}.`,
+          error:
+            'Deleted on Meta but failed to delete locally. Run "Sync from Meta" to recover.',
         },
         { status: 500 },
       )
@@ -318,12 +290,11 @@ export async function DELETE(
 
     return NextResponse.json({ success: true, dry_run: isDryRun() })
   } catch (error) {
+    const mapped = toErrorResponse(error)
+    if (mapped.status === 401 || mapped.status === 403) return mapped
     console.error('Error deleting template:', error)
     return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : 'Failed to delete template.',
-      },
+      { error: 'Failed to delete template.' },
       { status: 500 },
     )
   }

@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
   CONVERSATION_SELECT_LEGACY,
+  CONVERSATION_LIST_LIMIT,
   isLostDealConversation,
   matchesContactFilters,
   normalizeConversations,
@@ -49,7 +50,14 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
 
 
 
-type InboxFilter = ConversationStatus | "all" | "unread";
+type InboxFilter =
+  | ConversationStatus
+  | "all"
+  | "unread"
+  | "waiting_team"
+  | "waiting_customer"
+  | "sla_breached"
+  | "follow_up_today";
 type AssigneeFilter = "all" | "mine" | "unassigned";
 
 export function ConversationList({
@@ -60,15 +68,27 @@ export function ConversationList({
   resyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
-  const { user, canViewAllConversations } = useAuth();
+  const { user, canViewAllConversations, hasCrm11Feature } = useAuth();
+  const inboxOps = hasCrm11Feature("crm11_inbox_ops");
 
-  const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
-    { label: t("filterAll"), value: "all" },
-    { label: t("filterUnread"), value: "unread" },
-    { label: t("filterOpen"), value: "open" },
-    { label: t("filterPending"), value: "pending" },
-    { label: t("filterClosed"), value: "closed" },
-  ], [t]);
+  const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => {
+    const base: { label: string; value: InboxFilter }[] = [
+      { label: t("filterAll"), value: "all" },
+      { label: t("filterUnread"), value: "unread" },
+      { label: t("filterOpen"), value: "open" },
+      { label: t("filterPending"), value: "pending" },
+      { label: t("filterClosed"), value: "closed" },
+    ];
+    if (inboxOps) {
+      base.push(
+        { label: t("filterWaitingTeam"), value: "waiting_team" },
+        { label: t("filterWaitingCustomer"), value: "waiting_customer" },
+        { label: t("filterSlaBreached"), value: "sla_breached" },
+        { label: t("filterFollowUpToday"), value: "follow_up_today" },
+      );
+    }
+    return base;
+  }, [t, inboxOps]);
 
   const ASSIGNEE_OPTIONS: { label: string; value: AssigneeFilter }[] = useMemo(
     () => [
@@ -112,17 +132,21 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      let { data, error } = await supabase
+      const first = await supabase
         .from("conversations")
         .select(CONVERSATION_SELECT)
-        .order("last_message_at", { ascending: false });
+        .order("last_message_at", { ascending: false })
+        .limit(CONVERSATION_LIST_LIMIT);
+      let data: unknown = first.data;
+      let error = first.error;
 
       // Inventory join may fail before migration 046 — retry without vehicles.
       if (error) {
         const fallback = await supabase
           .from("conversations")
           .select(CONVERSATION_SELECT_LEGACY)
-          .order("last_message_at", { ascending: false });
+          .order("last_message_at", { ascending: false })
+          .limit(CONVERSATION_LIST_LIMIT);
         data = fallback.data;
         error = fallback.error;
       }
@@ -143,6 +167,33 @@ export function ConversationList({
 
       onConversationsLoadedRef.current(normalizeConversations(data ?? []));
       setLoading(false);
+
+      // Hydrate SLA breach flags (best-effort; ignore if table missing)
+      try {
+        const ids = (Array.isArray(data) ? data : []).map(
+          (c: { id?: string }) => c.id,
+        ).filter(Boolean) as string[];
+        if (ids.length > 0) {
+          const { data: sla } = await supabase
+            .from("conversation_sla")
+            .select("conversation_id, breached, first_agent_at")
+            .in("conversation_id", ids.slice(0, 200))
+            .eq("breached", true)
+            .is("first_agent_at", null);
+          if (sla && sla.length > 0) {
+            const breached = new Set(
+              sla.map((s: { conversation_id: string }) => s.conversation_id),
+            );
+            onConversationsLoadedRef.current(
+              normalizeConversations(data ?? []).map((c) =>
+                breached.has(c.id) ? { ...c, slaBreached: true } : c,
+              ),
+            );
+          }
+        }
+      } catch {
+        /* pre-054 schema */
+      }
     })();
 
     return () => {
@@ -196,6 +247,27 @@ export function ConversationList({
 
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
+    } else if (filter === "waiting_team") {
+      result = result.filter(
+        (c) =>
+          c.operational_status === "waiting_team" ||
+          (!c.operational_status && c.status === "open"),
+      );
+    } else if (filter === "waiting_customer") {
+      result = result.filter((c) => c.operational_status === "waiting_customer");
+    } else if (filter === "sla_breached") {
+      result = result.filter((c) => c.slaBreached);
+    } else if (filter === "follow_up_today") {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      result = result.filter((c) => {
+        const at = c.openDealSummary?.nextActionAt;
+        if (!at) return false;
+        const d = new Date(at);
+        return d >= today && d < tomorrow;
+      });
     } else if (filter !== "all") {
       result = result.filter((c) => c.status === filter);
     }
@@ -586,6 +658,11 @@ function ConversationItem({
             {conversation.last_message_text || t("noMessagesYet")}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
+            {conversation.slaBreached && (
+              <span className="rounded bg-amber-500/20 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-400">
+                SLA
+              </span>
+            )}
             {showLostBadge && (
               <span className="rounded bg-red-500/15 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-red-400">
                 {t("lostBadge")}
@@ -605,6 +682,19 @@ function ConversationItem({
             />
           </div>
         </div>
+        {(conversation.openDealSummary?.stageName ||
+          conversation.openDealSummary?.nextAction ||
+          conversation.openDealSummary?.assigneeName) && (
+          <p className="mt-1 truncate text-[10px] text-muted-foreground/80">
+            {[
+              conversation.openDealSummary.assigneeName,
+              conversation.openDealSummary.stageName,
+              conversation.openDealSummary.nextAction,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        )}
       </div>
     </button>
   );

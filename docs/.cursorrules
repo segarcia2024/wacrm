@@ -1,0 +1,21 @@
+# Protocolo de Desarrollo - WACRM
+
+## Arquitectura Base
+- Framework: Next.js y Node.js.
+- Estilos: Uso exclusivo de Tailwind CSS.
+- Infraestructura: Contenedores Docker detrás de Nginx.
+- Core del Sistema: Desarrollo centrado en la integración mediante la API nativa de WhatsApp.
+
+## Reglas de Desarrollo y UI
+- Enfoque estricto en el desarrollo de producto y lógica de negocio.
+- Escribir código modular, limpio y altamente tipado.
+- Precisión Visual: Los iconos y elementos de la interfaz deben ser generados de forma precisa e idénticos en CSS/Tailwind a los diseños de referencia. Prohibido usar aproximaciones genéricas.
+
+## Pruebas Automatizadas Obligatorias
+- Antes de modificar funciones críticas, escribir y verificar pruebas unitarias (Jest).
+- Mockear siempre las respuestas de la API de WhatsApp en los entornos de prueba para evitar cobros o mensajes accidentales.
+
+## Seguridad y Prevención de Rupturas
+- Nunca exponer variables de entorno (`.env`) en el código.
+- Validar y sanitizar absolutamente todos los inputs entrantes de los webhooks antes de procesarlos.
+- Evaluar el impacto en el rendimiento de los contenedores Docker antes de agregar nuevas dependencias al `package.json`.

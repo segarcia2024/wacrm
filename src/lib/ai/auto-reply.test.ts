@@ -110,6 +110,12 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1', text: 'Hello!' }),
     )
+    expect(h.generateReply.mock.calls[0][0].tools).toBeTruthy()
+    expect(h.generateReply.mock.calls[0][0].toolContext).toMatchObject({
+      accountId: 'acct-1',
+      contactId: 'contact-1',
+      allowWrites: true,
+    })
   })
 
   it('grounds the reply in retrieved knowledge', async () => {

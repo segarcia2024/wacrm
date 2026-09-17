@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
@@ -17,6 +17,7 @@ import { useInboxChrome } from "@/hooks/use-inbox-chrome";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
+import type { InboxDealSavedEvent } from "@/components/inbox/inbox-deal-form";
 import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,7 @@ import { cn } from "@/lib/utils";
 // across reloads and sessions (device-scoped, like the theme prefs).
 const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
 
-export default function InboxPage() {
+function InboxPageInner() {
   const t = useTranslations("Inbox.page");
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -128,11 +129,13 @@ export default function InboxPage() {
     hydratingConvIdsRef.current.add(convId);
     try {
       const supabase = createClient();
-      let { data, error } = await supabase
+      const first = await supabase
         .from("conversations")
         .select(CONVERSATION_SELECT)
         .eq("id", convId)
         .maybeSingle();
+      let data: unknown = first.data;
+      let error = first.error;
       if (error) {
         const fallback = await supabase
           .from("conversations")
@@ -627,6 +630,117 @@ export default function InboxPage() {
     );
   }, []);
 
+  const handleDealChanged = useCallback(
+    (event?: InboxDealSavedEvent) => {
+      if (!event) {
+        setResyncToken((n) => n + 1);
+        return;
+      }
+
+      if (event.type === "saved") {
+        setResyncToken((n) => n + 1);
+        return;
+      }
+
+      const conversationId = activeConversation?.id ?? null;
+
+      const patchLinkedDeals = (
+        conv: Conversation,
+        mutator: (
+          deals: NonNullable<Conversation["linkedDeals"]>,
+        ) => NonNullable<Conversation["linkedDeals"]>,
+      ): Conversation => {
+        const current = conv.linkedDeals ?? [];
+        return { ...conv, linkedDeals: mutator(current) };
+      };
+
+      if (event.type === "deleted") {
+        setConversations((prev) =>
+          prev.map((c) =>
+            !conversationId || c.id === conversationId
+              ? patchLinkedDeals(c, (deals) =>
+                  deals.filter((d) => d.id !== event.dealId),
+                )
+              : c,
+          ),
+        );
+        setActiveConversation((prev) =>
+          prev
+            ? patchLinkedDeals(prev, (deals) =>
+                deals.filter((d) => d.id !== event.dealId),
+              )
+            : prev,
+        );
+        return;
+      }
+
+      if (event.type === "status") {
+        setConversations((prev) =>
+          prev.map((c) => {
+            if (conversationId && c.id !== conversationId) return c;
+            let next = patchLinkedDeals(c, (deals) => {
+              const exists = deals.some((d) => d.id === event.dealId);
+              if (!exists) {
+                return [
+                  ...deals,
+                  {
+                    id: event.dealId,
+                    status: event.status,
+                    conversation_id: c.id,
+                  },
+                ];
+              }
+              return deals.map((d) =>
+                d.id === event.dealId ? { ...d, status: event.status } : d,
+              );
+            });
+            if (event.status === "lost" && event.conversationClosed) {
+              next = { ...next, status: "closed" };
+            } else if (event.status === "open") {
+              next = { ...next, status: "open" };
+            }
+            return next;
+          }),
+        );
+        setActiveConversation((prev) => {
+          if (!prev) return prev;
+          let next = patchLinkedDeals(prev, (deals) => {
+            const exists = deals.some((d) => d.id === event.dealId);
+            if (!exists) {
+              return [
+                ...deals,
+                {
+                  id: event.dealId,
+                  status: event.status,
+                  conversation_id: prev.id,
+                },
+              ];
+            }
+            return deals.map((d) =>
+              d.id === event.dealId ? { ...d, status: event.status } : d,
+            );
+          });
+          if (event.status === "lost" && event.conversationClosed) {
+            next = { ...next, status: "closed" };
+          } else if (event.status === "open") {
+            next = { ...next, status: "open" };
+          }
+          return next;
+        });
+
+        // Agents leave the thread immediately — it disappears from their list.
+        if (event.status === "lost" && !canViewAllConversations) {
+          setActiveConversation(null);
+          setActiveContact(null);
+          setMessages([]);
+          autoSelectedForDeepLinkRef.current = null;
+          router.replace("/inbox", { scroll: false });
+        }
+      }
+    },
+    [activeConversation?.id, canViewAllConversations, router],
+  );
+
   // On mobile (<lg) we show a SINGLE pane — either the list or the
   // thread — rather than cramming both side-by-side. Selecting a
   // conversation slides the thread in; the thread's back button pops
@@ -713,6 +827,7 @@ export default function InboxPage() {
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
             onContactUpdated={handleContactUpdated}
+            onDealChanged={handleDealChanged}
           />
         </div>
 
@@ -726,10 +841,27 @@ export default function InboxPage() {
               contact={activeContact}
               conversationId={activeConversation?.id ?? null}
               onContactUpdated={handleContactUpdated}
+              onDealChanged={handleDealChanged}
             />
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+function InboxFallback() {
+  return (
+    <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-background">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+    </div>
+  );
+}
+
+export default function InboxPage() {
+  return (
+    <Suspense fallback={<InboxFallback />}>
+      <InboxPageInner />
+    </Suspense>
   );
 }

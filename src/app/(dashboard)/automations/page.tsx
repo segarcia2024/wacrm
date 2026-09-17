@@ -317,14 +317,37 @@ function AutomationCard({
             >
               {meta.label}
             </span>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide">
+              {automation.lifecycle_status ??
+                (automation.is_active ? "active" : "paused")}
+            </span>
+            {automation.version != null && (
+              <span className="tabular-nums">v{automation.version}</span>
+            )}
             <span className="tabular-nums">
               {automation.execution_count === 1
                 ? t("runs", { count: automation.execution_count })
                 : t("runsPlural", { count: automation.execution_count })}
             </span>
+            {(automation.success_count != null || automation.error_count != null) && (
+              <span className="tabular-nums text-[11px]">
+                ✓{automation.success_count ?? 0} · ✗{automation.error_count ?? 0}
+              </span>
+            )}
             <span aria-hidden>·</span>
-            <span>{t("lastRun", { time: formatRelative(automation.last_executed_at) })}</span>
+            <span>
+              {t("lastRun", {
+                time: formatRelative(
+                  automation.last_run_at ?? automation.last_executed_at,
+                ),
+              })}
+            </span>
           </div>
+          {automation.last_error && (
+            <p className="mt-1 truncate text-[11px] text-red-400">
+              {automation.last_error}
+            </p>
+          )}
         </button>
 
         <div className="flex items-center gap-3">

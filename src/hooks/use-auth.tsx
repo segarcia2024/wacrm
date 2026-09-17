@@ -17,6 +17,8 @@ import {
   canEditSettings as canEditSettingsFor,
   canManageMembers as canManageMembersFor,
   canSendMessages as canSendMessagesFor,
+  canViewAllConversations as canViewAllConversationsFor,
+  canViewAllDeals as canViewAllDealsFor,
   isAccountRole,
   type AccountRole,
 } from "@/lib/auth/roles";
@@ -42,6 +44,8 @@ interface AccountSummary {
   name: string;
   /** Default deal currency. Fixed to COP (migration 037). */
   default_currency: string;
+  /** CRM 1.1 gradual rollout flags (accounts.feature_flags). */
+  feature_flags: import("@/lib/crm11/feature-flags").FeatureFlags;
 }
 
 interface AuthContextValue {
@@ -101,6 +105,12 @@ interface AuthContextValue {
   canEditSettings: boolean;
   /** True if the caller can send messages and edit operational data (agent+). */
   canSendMessages: boolean;
+  /** True if the caller sees the full account inbox (admin+). */
+  canViewAllConversations: boolean;
+  /** True if the caller sees the full account pipeline (admin+). */
+  canViewAllDeals: boolean;
+  /** CRM 1.1 feature flag check (account.feature_flags). */
+  hasCrm11Feature: (flag: import("@/lib/crm11/feature-flags").Crm11Flag) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -144,7 +154,7 @@ export function AuthProvider({
       const { data, error } = await supabase
         .from("profiles")
         .select(
-          "id, full_name, email, avatar_url, role, beta_features, account_id, account_role",
+          "id, full_name, email, avatar_url, beta_features, account_id, account_role",
         )
         .eq("user_id", userId)
         .maybeSingle();
@@ -175,23 +185,42 @@ export function AuthProvider({
         if (data.account_id) {
           const { data: account, error: accountErr } = await supabase
             .from("accounts")
-            // default_currency added in migration 021; narrowed to COP
-            // below for older schemas where it reads null or USD.
-            .select("id, name, default_currency")
+            // default_currency added in migration 021; feature_flags in 052.
+            .select("id, name, default_currency, feature_flags")
             .eq("id", data.account_id)
             .maybeSingle();
           if (accountErr) {
-            console.error("[AuthProvider] fetchAccount error:", {
-              message: accountErr.message,
-              details: accountErr.details,
-              hint: accountErr.hint,
-              code: accountErr.code,
-            });
+            // Older schemas without feature_flags: retry without the column.
+            const { data: accountFallback } = await supabase
+              .from("accounts")
+              .select("id, name, default_currency")
+              .eq("id", data.account_id)
+              .maybeSingle();
+            if (accountFallback) {
+              accountRow = {
+                id: accountFallback.id,
+                name: accountFallback.name,
+                default_currency:
+                  accountFallback.default_currency ?? DEFAULT_CURRENCY,
+                feature_flags: {},
+              };
+            } else {
+              console.error("[AuthProvider] fetchAccount error:", {
+                message: accountErr.message,
+                details: accountErr.details,
+                hint: accountErr.hint,
+                code: accountErr.code,
+              });
+            }
           } else if (account) {
+            const { parseFeatureFlags } = await import(
+              "@/lib/crm11/feature-flags"
+            );
             accountRow = {
               id: account.id,
               name: account.name,
               default_currency: account.default_currency ?? DEFAULT_CURRENCY,
+              feature_flags: parseFeatureFlags(account.feature_flags),
             };
           }
         }
@@ -210,7 +239,7 @@ export function AuthProvider({
           full_name: data.full_name,
           email: data.email,
           avatar_url: data.avatar_url,
-          role: data.role,
+          role: accountRole,
           // `beta_features` is `NOT NULL DEFAULT ARRAY[]` in the DB, but
           // narrow defensively in case the column hasn't been migrated yet
           // (older deployments running 011 lazily) — `null` reads as no
@@ -333,6 +362,7 @@ export function AuthProvider({
   // dependencies downstream.
   const derived = useMemo(() => {
     const role = profile?.account_role ?? null;
+    const flags = account?.feature_flags ?? {};
     return {
       accountRole: role,
       accountId: profile?.account_id ?? null,
@@ -343,8 +373,14 @@ export function AuthProvider({
       canManageMembers: role ? canManageMembersFor(role) : false,
       canEditSettings: role ? canEditSettingsFor(role) : false,
       canSendMessages: role ? canSendMessagesFor(role) : false,
+      canViewAllConversations: role
+        ? canViewAllConversationsFor(role)
+        : false,
+      canViewAllDeals: role ? canViewAllDealsFor(role) : false,
+      hasCrm11Feature: (flag: import("@/lib/crm11/feature-flags").Crm11Flag) =>
+        flags[flag] === true,
     };
-  }, [profile?.account_role, profile?.account_id]);
+  }, [profile?.account_role, profile?.account_id, account?.feature_flags]);
 
   return (
     <AuthContext.Provider
@@ -396,6 +432,9 @@ export function useAuth(): AuthContextValue {
       canManageMembers: false,
       canEditSettings: false,
       canSendMessages: false,
+      canViewAllConversations: false,
+      canViewAllDeals: false,
+      hasCrm11Feature: () => false,
     };
   }
   return ctx;

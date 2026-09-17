@@ -9,6 +9,134 @@ Versions follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Pre-1.0, `MINOR` bumps cover new modules; `PATCH` bumps cover bug fixes
 and polish.
 
+## [0.10.0] — 2026-09-17
+
+Revio CRM 1.1: dashboard operativo, bandeja comercial, embudo, SLA, agenda y
+observabilidad de automatizaciones. Cambios **aditivos**; desactivar flags en
+Settings → CRM 1.1 para rollback parcial sin migraciones inversas.
+
+> **Migration required:** apply `supabase/migrations/052` through `057` (in order)
+> before restarting the app.
+>
+> Cron: include `GET /api/sla/cron` (header `x-cron-secret`) every minute if
+> `crm11_sla` is enabled. See `scripts/cron-jobs.sh` and `DEPLOYMENT.md`.
+>
+> Rollback tag: `pre-crm11-20260917` (app code on `main` before this release).
+
+### Added
+
+- **Feature flags CRM 1.1** (`crm11_*`) en Settings → CRM 1.1.
+- **Dashboard:** KPIs corregidos (negocios abiertos por `stage.outcome`), tarjetas
+  y filtros operativos.
+- **Bandeja:** `operational_status`, filtros ops, campos comerciales en deals,
+  resolver conversación, avisos de duplicados.
+- **Embudo:** etapas con `outcome`, vista históricos por depurar, `deal_vehicles`.
+- **SLA:** primera respuesta humana 5/10/15 min, tabla `conversation_sla`,
+  endpoint `/api/sla/cron`.
+- **Agenda:** estados ampliados, recordatorios 24h y 2h, no-show al asesor.
+- **Automatizaciones:** `lifecycle_status`, contadores y `last_run_at`.
+- **Locations** (tabla + flag `crm11_locations`).
+- Scripts ops: `scripts/cron-jobs.sh`, `scripts/run-sla-once.ts`.
+
+### Changed
+
+- Nav: Flows/Agentes IA ocultos para agent/viewer; Broadcasts fuera del nav principal.
+- Webhook WhatsApp sincroniza `operational_status` en inbound; envío agente en outbound.
+
+## [0.10.0] — 2026-09-17
+
+Revio **CRM 1.1**: dashboard operativo, bandeja comercial, embudo con outcomes,
+SLA de primera respuesta, citas ampliadas y observabilidad de automatizaciones.
+Cambios **aditivos** con feature flags (`Settings → CRM 1.1`).
+
+> **Migration required:** apply `supabase/migrations/052_crm11_flags_locations_stages.sql`
+> through `057_crm11_appointment_2h_reminder.sql` (in order) before restarting.
+>
+> Enable flags per account in `/settings?tab=crm11`. Cron must include
+> `GET /api/sla/cron` with header `x-cron-secret` = `AUTOMATION_CRON_SECRET`
+> (see `scripts/cron-jobs.sh`).
+
+### Added
+
+- **Feature flags CRM 1.1** on `accounts.feature_flags` and settings UI.
+- **Dashboard:** corrected open-deal KPIs (stage `outcome=open`), extra cards/filters when `crm11_dashboard` is on.
+- **Inbox ops:** `operational_status`, commercial deal fields, duplicate hints, resolve conversation when `crm11_inbox_ops` is on.
+- **Funnel:** pipeline stage `outcome`, CRM 1.1 stages for new deals, historical cleanup view when `crm11_funnel` is on.
+- **SLA:** `conversation_sla` table, 5/10/15 min in-app notifications (no reassignment) when `crm11_sla` is on; cron at `/api/sla/cron`.
+- **Appointments:** extended states, 24h + 2h reminders, no-show advisor notification.
+- **Automations:** `lifecycle_status`, success/error counters, `last_run_at`.
+- **Locations** table (optional module via `crm11_locations`).
+- Deploy helpers: `scripts/cron-jobs.sh`, `scripts/run-sla-once.ts`.
+
+### Changed
+
+- Sidebar hides Flows/AI Agents for agent/viewer; Broadcasts moved out of main nav.
+- WhatsApp inbound/outbound syncs `operational_status` when SLA flag is enabled.
+- `DEPLOYMENT.md`: migrations through `057`, SLA cron documented.
+
+## [0.9.0] — 2026-09-03
+
+The WhatsApp AI agent can look up **live vehicle inventory** and **book
+appointments** onto the Revio agenda.
+
+No migration required.
+
+### Added
+
+- **Inventory tools.** Auto-reply, inbox drafts, and the playground can
+  call `search_vehicles` / `get_vehicle` against `vehicles` so prices and
+  availability come from stock, not from the knowledge base.
+- **Agenda booking.** In auto-reply (live WhatsApp), the model can check
+  a slot and `create_appointment` after the customer confirms a time.
+  The row lands in `appointments` (same table as `/agenda`) with
+  reminder enabled. Draft and playground stay read-only for bookings.
+- Function-calling loop for OpenAI and Anthropic (up to 3 tool rounds +
+  a final reply). Times are America/Bogota.
+
+## [0.8.2] — 2026-08-29
+
+Cierra la deuda técnica de billing, envío WhatsApp y endurecimiento de schema.
+
+> **Migration required:** apply `supabase/migrations/051_tech_debt_hardening.sql`
+> (índice único de plantillas por cuenta, `verify_token_hash`, RLS de
+> `automation_pending_executions` y `transactions`, índices FK, policies
+> inbox/deals con `(select auth.uid())`).
+>
+> Configure `WOMPI_EVENTS_SECRET` and point Wompi Eventos to
+> `POST /api/billing/events`. Cron jobs must send `x-cron-secret`, not
+> `Authorization: Bearer`.
+
+### Security
+
+- **Wompi Eventos.** El widget del navegador ya no es la fuente de verdad
+  del cobro: el webhook verifica checksum, actualiza `transactions` por
+  `reference` y rechaza montos que no coinciden.
+- **Asientos.** Invitaciones, redeem y promoción viewer→asesor se
+  bloquean cuando el plan pagado está lleno (cuentas sin cobro
+  aprobado siguen en grandfather).
+- **Envío WhatsApp.** `send` / `broadcast` / `react` exigen `requireRole('agent')`
+  *antes* de hablar con Meta, de modo que un viewer no dispare un
+  mensaje real aunque RLS bloquee el INSERT.
+- **Plantillas y config.** Mutaciones de plantillas, OAuth y config
+  WhatsApp exigen admin + rate limit.
+- **Verify token.** El GET del webhook de Meta busca por hash; ya no
+  descifra todo el parque de tokens.
+
+### Changed
+
+- Persistencia outbound unificada (`persistOutboundMessage`) con las
+  columnas de identidad de la migración 050.
+- Un solo `supabaseAdmin()` compartido.
+- Inbox lista como máximo 250 conversaciones.
+- Test del webhook de Meta migrado a Vitest; Jest eliminado.
+- Docs de deploy: migraciones `001`–`051`, header de cron y Eventos Wompi.
+- Tipos `Database` generados en `src/types/database.ts`; clientes
+  Supabase tipados.
+- Rate limit async con Upstash Redis opcional (fallback in-memory).
+- Inbox lista columnas explícitas (ya no `select *`).
+- Copy de pricing en next-intl (`Billing.pricing`).
+- El cliente deja de leer `profiles.role` (solo `account_role`).
+
 ## [0.8.1] — 2026-07-10
 
 Fixes inbound chats fragmenting into multiple threads for the same

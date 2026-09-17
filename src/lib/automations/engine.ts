@@ -218,6 +218,16 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
   if (rpcErr) {
     console.error('[automations] increment counter failed:', rpcErr)
   }
+
+  // CRM 1.1 observability (additive; ignore if columns missing)
+  await db
+    .from('automations')
+    .update({
+      last_run_at: new Date().toISOString(),
+      lifecycle_status: 'active',
+      success_count: (automation.success_count ?? 0) + 1,
+    })
+    .eq('id', automation.id)
 }
 
 interface ExecuteArgs {
@@ -453,15 +463,19 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!args.contactId) throw new Error('assign_conversation needs a contact')
       let agentId = cfg.agent_id
       if (cfg.mode === 'round_robin') {
-        // Pick any member of the account. The existing implementation
-        // only ever returned the automation's author; preserving that
-        // shape until a real round-robin algorithm replaces it.
-        const { data: profiles } = await db
-          .from('profiles')
-          .select('user_id')
-          .eq('account_id', args.automation.account_id)
-          .limit(1)
-        agentId = profiles?.[0]?.user_id
+        // Atomic claim: locks accounts, advances
+        // round_robin_cursor_user_id, returns next eligible agent
+        // (role = agent only). See migration 041 + round-robin.ts.
+        const { data: claimed, error: claimErr } = await db.rpc(
+          'claim_next_round_robin_agent',
+          { p_account_id: args.automation.account_id },
+        )
+        if (claimErr) {
+          throw new Error(
+            `round-robin claim failed: ${claimErr.message ?? claimErr}`,
+          )
+        }
+        agentId = typeof claimed === 'string' ? claimed : undefined
       }
       if (!agentId) return 'no agent resolved'
       await db

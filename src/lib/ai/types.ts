@@ -31,10 +31,26 @@ export interface AiConfig {
   embeddingsApiKey: string | null
 }
 
-/** A single conversation turn in the shape both providers accept. */
+/** A model-requested tool invocation (provider-neutral). */
+export interface ToolCall {
+  id: string
+  name: string
+  /** JSON-encoded argument object (OpenAI wire format). */
+  arguments: string
+}
+
+/** A single conversation turn in the shape both providers accept.
+ *  `tool` turns and `toolCalls` exist only inside a generation loop —
+ *  they are never persisted to `messages`. */
 export interface ChatMessage {
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'tool'
   content: string
+  /** Assistant turn that requested one or more CRM tools. */
+  toolCalls?: ToolCall[]
+  /** Provider tool-call id, set on `role: 'tool'` results. */
+  toolCallId?: string
+  /** Tool name, set on `role: 'tool'` results. */
+  name?: string
 }
 
 /**
@@ -52,6 +68,8 @@ export interface AiUsage {
 export interface ProviderResult {
   text: string
   usage: AiUsage | null
+  /** Set when the model wants to call CRM tools instead of (or before) a reply. */
+  toolCalls?: ToolCall[]
 }
 
 /** Outcome of a generation call. */

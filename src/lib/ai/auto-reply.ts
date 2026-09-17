@@ -7,6 +7,7 @@ import { buildSystemPrompt } from './defaults'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
+import { CRM_TOOLS } from './tools/definitions'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
@@ -87,7 +88,7 @@ export async function dispatchInboundToAiReply(
     // marketing blast landing 200 replies at once) so we never run the
     // owner's key past the provider's rate limit. Over the limit → skip
     // the auto-reply; the inbound still sits in the inbox for a human.
-    const acctLimit = checkRateLimit(
+    const acctLimit = await checkRateLimit(
       `ai-autoreply:${accountId}`,
       RATE_LIMITS.aiAutoReplyAccount,
     )
@@ -110,12 +111,23 @@ export async function dispatchInboundToAiReply(
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      tools: { allowWrites: true },
     })
 
     const { text, handoff, usage } = await generateReply({
       config,
       systemPrompt,
       messages,
+      tools: CRM_TOOLS,
+      toolContext: {
+        db,
+        accountId,
+        conversationId,
+        contactId,
+        actorUserId: configOwnerUserId,
+        defaultAssigneeId: config.handoffAgentId,
+        allowWrites: true,
+      },
     })
 
     // Record token spend on the account's BYO key. Fire-and-forget so it

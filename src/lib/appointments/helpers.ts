@@ -14,8 +14,10 @@ export const APPOINTMENT_TYPES: AppointmentType[] = [
 
 export const DEFAULT_DURATION_MINUTES = 60;
 
-/** Reminder fires once the appointment is within this many ms. */
+/** Reminder fires once the appointment is within this many ms (24h). */
 export const REMINDER_LEAD_MS = 24 * 60 * 60 * 1000;
+/** Second reminder window (2h). */
+export const REMINDER_2H_LEAD_MS = 2 * 60 * 60 * 1000;
 
 export function isAppointmentReminderDue(
   startsAtIso: string,
@@ -25,6 +27,17 @@ export function isAppointmentReminderDue(
   if (!Number.isFinite(starts)) return false;
   const msUntil = starts - now.getTime();
   return msUntil > 0 && msUntil <= REMINDER_LEAD_MS;
+}
+
+/** True when appointment is within 2 hours and still upcoming. */
+export function isAppointment2hReminderDue(
+  startsAtIso: string,
+  now = new Date(),
+): boolean {
+  const starts = new Date(startsAtIso).getTime();
+  if (!Number.isFinite(starts)) return false;
+  const msUntil = starts - now.getTime();
+  return msUntil > 0 && msUntil <= REMINDER_2H_LEAD_MS;
 }
 
 export function buildClientReminderText(args: {

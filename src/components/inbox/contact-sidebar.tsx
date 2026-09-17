@@ -57,6 +57,10 @@ import {
   isValidE164,
   sanitizePhoneForMeta,
 } from "@/lib/whatsapp/phone-utils";
+import {
+  commercialFieldLabel,
+  computeCommercialIntegrity,
+} from "@/lib/crm11/commercial-integrity";
 
 type EditableField = "name" | "email" | "company" | "phone";
 
@@ -88,7 +92,9 @@ export function ContactSidebar({
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
 
-  const { accountId, canViewAllDeals } = useAuth();
+  const { accountId, canViewAllDeals, hasCrm11Feature } = useAuth();
+  const inboxOps = hasCrm11Feature("crm11_inbox_ops");
+  const [resolving, setResolving] = useState(false);
   const canEdit = useCan("send-messages");
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -400,6 +406,26 @@ export function ContactSidebar({
     ],
   );
 
+  const handleResolveConversation = useCallback(async () => {
+    if (!conversationId || !inboxOps) return;
+    setResolving(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("conversations")
+      .update({
+        operational_status: "resolved",
+        status: "closed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", conversationId);
+    setResolving(false);
+    if (error) {
+      toast.error("No se pudo resolver la conversación");
+      return;
+    }
+    toast.success("Conversación resuelta");
+  }, [conversationId, inboxOps]);
+
   const handleFieldBlur = useCallback(
     (field: EditableField) => {
       if (skipBlurSaveRef.current) {
@@ -410,6 +436,15 @@ export function ContactSidebar({
     },
     [saveField],
   );
+
+  const openDeal = visibleDeals.find((d) => d.status === "open") ?? null;
+  const integrity = contact
+    ? computeCommercialIntegrity({
+        name: contact.name,
+        phone: contact.phone,
+        deal: openDeal,
+      })
+    : null;
 
   const handleRemoveTag = useCallback(
     async (tag: Tag & { contact_tag_id: string }) => {
@@ -509,6 +544,33 @@ export function ContactSidebar({
                 initials
               )}
             </div>
+
+            {integrity && (
+              <div className="mt-3 w-full rounded-lg border border-border bg-muted/40 px-3 py-2 text-left">
+                <p className="text-xs font-medium text-foreground">
+                  Perfil comercial: {integrity.percent}% completo
+                </p>
+                {integrity.missing.length > 0 && (
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Faltan:{" "}
+                    {integrity.missing.map(commercialFieldLabel).join(", ")}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {inboxOps && conversationId && canEdit && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3 w-full"
+                disabled={resolving}
+                onClick={() => void handleResolveConversation()}
+              >
+                {resolving ? "Resolviendo…" : "Resolver conversación"}
+              </Button>
+            )}
 
             <div className="mt-3 w-full">
               {canEdit && editingField === "name" ? (

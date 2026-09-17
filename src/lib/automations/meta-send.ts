@@ -14,7 +14,11 @@ import {
   resolveWhatsAppRecipient,
 } from '@/lib/whatsapp/wa-identity'
 import { toMetaMessageAddress } from '@/lib/whatsapp/recipient-resolver'
-import { supabaseAdmin } from './admin-client'
+import {
+  persistOutboundMessage,
+  touchConversationPreview,
+} from '@/lib/whatsapp/persist-outbound'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 // ------------------------------------------------------------
 // Automation-side Meta sender.
@@ -201,30 +205,23 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   const content_text = input.kind === 'text' ? input.text : null
   const template_name = input.kind === 'template' ? input.templateName : null
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: input.conversationId,
-    sender_type: 'bot',
-    content_type,
-    content_text,
-    template_name,
-    message_id: waMessageId,
-    status: 'sent',
+  await persistOutboundMessage({
+    db,
+    conversationId: input.conversationId,
+    contactId: contact.id,
+    recipient: resolved,
+    senderType: 'bot',
+    contentType: content_type,
+    contentText: content_text,
+    templateName: template_name,
+    messageId: waMessageId,
   })
-  if (msgErr) {
-    // Meta already has the message; record the DB error but don't pretend
-    // the send failed. The engine wraps this in a log line.
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
-  }
 
-  await db
-    .from('conversations')
-    .update({
-      last_message_text:
-        input.kind === 'template' ? `[template:${input.templateName}]` : input.text,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', input.conversationId)
+  await touchConversationPreview(
+    db,
+    input.conversationId,
+    input.kind === 'template' ? `[template:${input.templateName}]` : input.text,
+  )
 
   return { whatsapp_message_id: waMessageId }
 }

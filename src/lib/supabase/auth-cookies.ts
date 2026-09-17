@@ -21,7 +21,13 @@ export function clearSupabaseAuthCookies(
 ): void {
   for (const { name } of request.cookies.getAll()) {
     if (isSupabaseAuthCookie(name)) {
-      response.cookies.delete(name)
+      // Path must match the original Set-Cookie or the browser keeps
+      // the stale token. `delete(name)` omits Path and often no-ops.
+      response.cookies.set(name, "", {
+        path: "/",
+        maxAge: 0,
+        sameSite: "lax",
+      })
     }
   }
 }

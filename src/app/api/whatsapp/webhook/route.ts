@@ -1,6 +1,7 @@
 import { NextResponse, after } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
+import { decrypt } from '@/lib/whatsapp/encryption'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { matchWhatsAppVerifyToken } from '@/lib/whatsapp/webhook-verify'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { isUniqueViolation, upsertWhatsAppContact } from '@/lib/contacts/dedupe'
 import { resolveInboundIdentity } from '@/lib/whatsapp/wa-identity'
@@ -20,19 +21,6 @@ import { parseTemplateButtonReply } from '@/lib/whatsapp/parse-button-reply'
 // give it headroom beyond the platform default (Vercel clamps this to the
 // plan's ceiling). Tune as needed.
 export const maxDuration = 60
-
-// Lazy-initialized to avoid build-time crash when env vars are missing
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
-function supabaseAdmin() {
-  if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-  }
-  return _adminClient
-}
 
 interface WhatsAppMessage {
   id: string
@@ -116,54 +104,9 @@ export async function GET(request: Request) {
       )
     }
 
-    // Fetch all whatsapp configs to check verify tokens
-    const { data: configs, error: configError } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('id, verify_token')
-
-    if (configError || !configs) {
-      console.error('Error fetching configs for verification:', configError)
-      return NextResponse.json(
-        { error: 'Verification failed' },
-        { status: 403 }
-      )
-    }
-
-    // Check if any config's verify_token matches. Also collect the
-    // matching row so we can opportunistically upgrade its token to
-    // GCM if it was still in the legacy CBC format.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let matchedConfig: any = null
-    for (const config of configs) {
-      if (!config.verify_token) continue
-      try {
-        if (decrypt(config.verify_token) === verifyToken) {
-          matchedConfig = config
-          break
-        }
-      } catch {
-        // Malformed / wrong-key token row — skip it and keep checking.
-      }
-    }
+    const matchedConfig = await matchWhatsAppVerifyToken(verifyToken)
 
     if (matchedConfig) {
-      // Fire-and-forget GCM upgrade. Safe to run on every subscribe
-      // since it's a no-op once the column is already GCM.
-      if (isLegacyFormat(matchedConfig.verify_token)) {
-        void supabaseAdmin()
-          .from('whatsapp_config')
-          .update({ verify_token: encrypt(verifyToken) })
-          .eq('id', matchedConfig.id)
-          .then(({ error }: { error: unknown }) => {
-            if (error) {
-              console.warn(
-                '[webhook] verify_token GCM upgrade failed:',
-                (error as { message?: string })?.message ?? error,
-              )
-            }
-          })
-      }
-      // Return challenge as plain text
       return new Response(challenge, {
         status: 200,
         headers: { 'Content-Type': 'text/plain' },
@@ -437,7 +380,11 @@ async function handleStatusUpdate(status: {
     .maybeSingle()
 
   if (msgRow) {
-    const conv = msgRow.conversations as { account_id: string } | null
+    const rawConv = msgRow.conversations
+    const conv = (Array.isArray(rawConv) ? rawConv[0] : rawConv) as
+      | { account_id: string }
+      | null
+      | undefined
     const accountId = conv?.account_id
     if (accountId) {
       await dispatchWebhookEvent(
@@ -755,6 +702,9 @@ async function processMessage(
       last_message_at: new Date().toISOString(),
       unread_count: (conversation.unread_count || 0) + 1,
       updated_at: new Date().toISOString(),
+      // CRM 1.1: customer wrote → waiting on team; reopen if resolved
+      operational_status: 'waiting_team',
+      status: 'open',
     })
     .eq('id', conversation.id)
 

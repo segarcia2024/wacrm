@@ -1,19 +1,19 @@
-import { getRequestConfig } from 'next-intl/server';
+import { getRequestConfig } from "next-intl/server";
+
+import en from "../../messages/en.json";
+import esCO from "../../messages/es-CO.json";
+
+const CATALOGS: Record<string, typeof en> = {
+  en,
+  "es-CO": esCO,
+};
 
 export default getRequestConfig(async () => {
-  // Read the locale from the environment, defaulting to 'en'
-  const locale = process.env.NEXT_PUBLIC_APP_LOCALE || 'en';
-
-  let messages;
-  try {
-    messages = (await import(`../../messages/${locale}.json`)).default;
-  } catch (error) {
-    // Fallback to English if the dictionary for the requested locale doesn't exist yet
-    messages = (await import(`../../messages/en.json`)).default;
-  }
+  const locale = process.env.NEXT_PUBLIC_APP_LOCALE || "en";
+  const messages = CATALOGS[locale] ?? en;
 
   return {
-    locale,
-    messages
+    locale: CATALOGS[locale] ? locale : "en",
+    messages,
   };
 });

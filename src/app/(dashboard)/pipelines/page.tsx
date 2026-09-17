@@ -32,6 +32,7 @@ import { GatedButton } from "@/components/ui/gated-button";
 import { useTranslations } from "next-intl";
 import { isDealInAgentScope } from "@/lib/deals/visibility";
 import { matchesVehicleSearch } from "@/lib/vehicles/search";
+import { isHistoricalDealToReview } from "@/lib/crm11/funnel";
 
 // Pipeline creation is admin-class (settings-tier write under
 // the new RLS); deal creation is operational and only requires
@@ -52,7 +53,9 @@ export default function PipelinesPage() {
   const supabase = createClient();
   const canEditSettings = useCan("edit-settings");
   const canCreateDeals = useCan("send-messages");
-  const { accountId, profile, canViewAllDeals } = useAuth();
+  const { accountId, profile, canViewAllDeals, hasCrm11Feature } = useAuth();
+  const crm11Funnel = hasCrm11Feature("crm11_funnel");
+  const [showHistoricalReview, setShowHistoricalReview] = useState(false);
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
@@ -172,6 +175,7 @@ export default function PipelinesPage() {
       name: t(`defaultStages.${s.key}`),
       color: s.color,
       position: s.position,
+      outcome: s.key === "won" ? "won" : "open",
     }));
     await supabase.from("pipeline_stages").insert(stagesPayload);
 
@@ -226,13 +230,44 @@ export default function PipelinesPage() {
         loadDeals(selectedPipelineId),
       ]);
       if (cancelled) return;
-      setStages(s);
+
+      // CRM 1.1: ensure extra stages exist without moving historical deals
+      if (crm11Funnel && s.length > 0) {
+        const { CRM11_EXTRA_STAGES } = await import("@/lib/crm11/funnel");
+        const existingNames = new Set(
+          s.map((st) => st.name.trim().toLowerCase()),
+        );
+        const maxPos = Math.max(...s.map((st) => st.position), 0);
+        const toInsert = CRM11_EXTRA_STAGES.filter(
+          (x) => !existingNames.has(x.name.toLowerCase()),
+        ).map((x, i) => ({
+          pipeline_id: selectedPipelineId,
+          name: x.name,
+          color: x.color,
+          position: maxPos + 1 + i,
+          outcome: x.outcome,
+        }));
+        if (toInsert.length > 0) {
+          await supabase.from("pipeline_stages").insert(toInsert);
+          // Bump funnel_version so new deals use improved funnel
+          await supabase
+            .from("pipelines")
+            .update({ funnel_version: 2 })
+            .eq("id", selectedPipelineId);
+          const refreshed = await loadStages(selectedPipelineId);
+          if (!cancelled) setStages(refreshed);
+        } else {
+          setStages(s);
+        }
+      } else {
+        setStages(s);
+      }
       setDeals(d);
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedPipelineId, loadStages, loadDeals]);
+  }, [selectedPipelineId, loadStages, loadDeals, crm11Funnel, supabase]);
 
   const refreshPipelines = useCallback(async () => {
     const list = await loadPipelines();
@@ -322,6 +357,7 @@ export default function PipelinesPage() {
       name: t(`defaultStages.${s.key}`),
       color: s.color,
       position: s.position,
+      outcome: s.key === "won" ? "won" : "open",
     }));
     await supabase.from("pipeline_stages").insert(stagesPayload);
 
@@ -336,9 +372,20 @@ export default function PipelinesPage() {
   const selectedPipeline = pipelines.find((p) => p.id === selectedPipelineId);
 
   const filteredDeals = useMemo(() => {
+    let list = deals;
+    if (showHistoricalReview) {
+      const stageById = new Map(stages.map((s) => [s.id, s]));
+      list = list.filter((d) =>
+        isHistoricalDealToReview({
+          status: d.status,
+          next_action: d.next_action,
+          stage: stageById.get(d.stage_id) ?? null,
+        }),
+      );
+    }
     const q = search.trim().toLowerCase();
-    if (!q) return deals;
-    return deals.filter((d) => {
+    if (!q) return list;
+    return list.filter((d) => {
       const title = d.title?.toLowerCase() ?? "";
       const name = d.contact?.name?.toLowerCase() ?? "";
       const phone = d.contact?.phone?.toLowerCase() ?? "";
@@ -357,7 +404,7 @@ export default function PipelinesPage() {
         )
       );
     });
-  }, [deals, search]);
+  }, [deals, search, showHistoricalReview, stages]);
 
   if (loading) {
     return (
@@ -453,14 +500,30 @@ export default function PipelinesPage() {
       </div>
 
       {pipelines.length > 0 ? (
-        <div className="relative max-w-md">
-          <Search className="absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("searchPlaceholder")}
-            className="border-border bg-card pl-9"
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative max-w-md flex-1">
+            <Search className="absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t("searchPlaceholder")}
+              className="border-border bg-card pl-9"
+            />
+          </div>
+          {crm11Funnel && (
+            <button
+              type="button"
+              onClick={() => setShowHistoricalReview((v) => !v)}
+              className={`rounded-md border px-3 py-2 text-xs font-medium ${
+                showHistoricalReview
+                  ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Negocios históricos por depurar
+              {showHistoricalReview ? ` (${filteredDeals.length})` : ""}
+            </button>
+          )}
         </div>
       ) : null}
 

@@ -1,23 +1,13 @@
 /**
- * In-memory per-key rate limiter.
+ * Per-key rate limiter.
  *
- * Fixed-window counter (not token bucket): every identifier gets a
- * fresh N-request budget each window. Simple, allocation-light, and
- * fine for a single-instance VPS — which is how forkers of this
- * template will usually deploy.
+ * Fixed-window counter. When `UPSTASH_REDIS_REST_URL` +
+ * `UPSTASH_REDIS_REST_TOKEN` are set, the counter lives in Redis so
+ * every instance shares one budget. Otherwise it falls back to a
+ * process-local Map (fine for a single VPS).
  *
- * Trade-off: a single Node process holds the Map, so horizontal scale
- * (multiple regions, multiple Hostinger nodes, Vercel serverless fan-
- * out) silently defeats the limit. If you scale beyond one instance,
- * swap the `check` implementation for Redis / Upstash / Cloudflare
- * Durable Objects keeping the same return shape. The call sites won't
- * change.
- *
- * Memory: entries are ~50 bytes each. With LIGHT_SWEEP below, expired
- * keys get cleared opportunistically on every ~1 000th call, so a
- * healthy instance stays in the low-MB range even with thousands of
- * distinct users. No background timer — works in serverless edge
- * runtimes that don't keep timers alive across requests.
+ * Redis errors fall back to memory so a blip in Upstash does not
+ * lock the product open or shut.
  */
 
 import { NextResponse } from 'next/server';
@@ -57,7 +47,7 @@ function sweepExpired(now: number) {
   }
 }
 
-export function checkRateLimit(
+function checkRateLimitMemory(
   key: string,
   { limit, windowMs }: RateLimitOptions,
 ): RateLimitResult {
@@ -89,6 +79,79 @@ export function checkRateLimit(
   };
 }
 
+function upstashConfig(): { url: string; token: string } | null {
+  const url = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  if (!url || !token) return null;
+  return { url: url.replace(/\/$/, ""), token };
+}
+
+interface UpstashPipelineRow {
+  result?: unknown;
+  error?: string;
+}
+
+async function checkRateLimitRedis(
+  key: string,
+  opts: RateLimitOptions,
+  cfg: { url: string; token: string },
+): Promise<RateLimitResult> {
+  const windowSec = Math.max(1, Math.ceil(opts.windowMs / 1000));
+  const bucket = Math.floor(Date.now() / opts.windowMs);
+  const redisKey = `rl:${key}:${bucket}`;
+  const reset = (bucket + 1) * opts.windowMs;
+
+  const res = await fetch(`${cfg.url}/pipeline`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify([
+      ["INCR", redisKey],
+      ["EXPIRE", redisKey, String(windowSec), "NX"],
+    ]),
+  });
+  if (!res.ok) {
+    throw new Error(`upstash ${res.status}`);
+  }
+  const rows = (await res.json()) as UpstashPipelineRow[];
+  if (rows[0]?.error) {
+    throw new Error(rows[0].error);
+  }
+  const count = Number(rows[0]?.result);
+  if (!Number.isFinite(count) || count < 1) {
+    throw new Error("upstash incr missing");
+  }
+  if (count > opts.limit) {
+    return { success: false, remaining: 0, reset, limit: opts.limit };
+  }
+  return {
+    success: true,
+    remaining: Math.max(0, opts.limit - count),
+    reset,
+    limit: opts.limit,
+  };
+}
+
+export async function checkRateLimit(
+  key: string,
+  opts: RateLimitOptions,
+): Promise<RateLimitResult> {
+  const cfg = upstashConfig();
+  if (cfg) {
+    try {
+      return await checkRateLimitRedis(key, opts, cfg);
+    } catch (err) {
+      console.warn(
+        "[rate-limit] Redis unavailable, falling back to memory:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return checkRateLimitMemory(key, opts);
+}
+
 /**
  * Standard 429 response with the headers clients expect (RFC 6585 +
  * draft-ietf-httpapi-ratelimit-headers). Callers just `return` this.
@@ -114,6 +177,12 @@ export function rateLimitResponse(result: RateLimitResult): NextResponse {
 
 /** Preconfigured budgets, tweak here not at call sites. */
 export const RATE_LIMITS = {
+  /** Password login attempts per client IP. Tight enough to blunt
+   *  credential stuffing while allowing a few fat-finger retries. */
+  authLogin: { limit: 20, windowMs: 60_000 },
+  /** Password login attempts per normalized email. Stops distributed
+   *  stuffing against one mailbox when IP buckets are rotated. */
+  authLoginEmail: { limit: 10, windowMs: 15 * 60_000 },
   /** Individual message send. 60/min per user = one per second
    *  sustained, comfortable for a live human typing. */
   send: { limit: 60, windowMs: 60_000 },

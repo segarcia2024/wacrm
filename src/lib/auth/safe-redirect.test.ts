@@ -12,5 +12,8 @@ describe("isSafeRedirectPath", () => {
     expect(isSafeRedirectPath("//evil.com")).toBe(false);
     expect(isSafeRedirectPath("https://evil.com")).toBe(false);
     expect(isSafeRedirectPath("/\\evil")).toBe(false);
+    expect(isSafeRedirectPath("/%2f%2fevil.com")).toBe(false);
+    expect(isSafeRedirectPath("/login@evil.com")).toBe(false);
+    expect(isSafeRedirectPath("")).toBe(false);
   });
 });

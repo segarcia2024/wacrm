@@ -116,6 +116,7 @@ export function PipelineSettings({
       name: s.name,
       color: s.color,
       position: i,
+      outcome: s.outcome ?? "open",
     }));
 
     const [renameRes, stagesRes] = await Promise.all([
@@ -149,6 +150,7 @@ export function PipelineSettings({
         name: trimmed,
         color: newStageColor,
         position: localStages.length,
+        outcome: "open",
       })
       .select()
       .single();
@@ -274,6 +276,11 @@ export function PipelineSettings({
                             updated[index] = { ...updated[index], color: v };
                             setLocalStages(updated);
                           }}
+                          onOutcomeChange={(v) => {
+                            const updated = [...localStages];
+                            updated[index] = { ...updated[index], outcome: v };
+                            setLocalStages(updated);
+                          }}
                           onRemove={() => handleRemoveStage(stage.id)}
                           colors={STAGE_COLORS}
                           t={t}
@@ -369,6 +376,7 @@ function SortableStageRow({
   stage,
   onNameChange,
   onColorChange,
+  onOutcomeChange,
   onRemove,
   colors,
   t,
@@ -376,6 +384,7 @@ function SortableStageRow({
   stage: PipelineStage;
   onNameChange: (v: string) => void;
   onColorChange: (v: string) => void;
+  onOutcomeChange: (v: "open" | "won" | "lost") => void;
   onRemove: () => void;
   colors: string[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -394,7 +403,7 @@ function SortableStageRow({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-2 rounded-lg border border-border bg-muted p-2"
+      className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted p-2"
     >
       <button
         type="button"
@@ -409,8 +418,20 @@ function SortableStageRow({
       <Input
         value={stage.name}
         onChange={(e) => onNameChange(e.target.value)}
-        className="h-7 flex-1 border-transparent bg-transparent text-sm text-foreground focus:border-border"
+        className="h-7 min-w-[7rem] flex-1 border-transparent bg-transparent text-sm text-foreground focus:border-border"
       />
+      <select
+        value={stage.outcome ?? "open"}
+        onChange={(e) =>
+          onOutcomeChange(e.target.value as "open" | "won" | "lost")
+        }
+        className="h-7 rounded-md border border-border bg-background px-1.5 text-[11px] text-foreground"
+        title="Clasificación KPI"
+      >
+        <option value="open">Abierta</option>
+        <option value="won">Ganada</option>
+        <option value="lost">Perdida</option>
+      </select>
       <Button
         variant="ghost"
         size="icon-xs"

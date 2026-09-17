@@ -90,6 +90,34 @@ export function canSendMessages(role: AccountRole): boolean {
 }
 
 /**
+ * Owner / admin: see every conversation in the account inbox.
+ * Agents and viewers are scoped to assigned-to-self + unassigned
+ * (see `can_view_conversation` in migration 044).
+ */
+export function canViewAllConversations(role: AccountRole): boolean {
+  return hasMinRole(role, "admin");
+}
+
+/**
+ * Owner / admin: see every deal in the account pipeline.
+ * Agents and viewers are scoped to assigned-to-self + unassigned
+ * (see `can_view_deal` in migration 045). Same privilege floor as
+ * {@link canViewAllConversations}.
+ */
+export function canViewAllDeals(role: AccountRole): boolean {
+  return hasMinRole(role, "admin");
+}
+
+/**
+ * Owner / admin: download the full contacts database (Excel).
+ * Agents and viewers can see their scoped list in the UI but must
+ * not dump the account roster.
+ */
+export function canExportContacts(role: AccountRole): boolean {
+  return hasMinRole(role, "admin");
+}
+
+/**
  * Viewer: read-only across everything. Provided as a positive
  * predicate so UI gates read naturally (`if (canViewOnly(role))`
  * shows the "Read-only" tooltip without inverting `canSendMessages`).

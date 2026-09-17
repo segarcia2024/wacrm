@@ -14,6 +14,9 @@ Objetivo: si algo se rompe, volver al estado anterior a la feature sin improvisa
 
 Memoria de producto: [ACCESIBILIDAD-CONVERSACIONES.md](./ACCESIBILIDAD-CONVERSACIONES.md)
 
+Track hermano (layout Inbox móvil, tag distinto): [PROTOCOLO-ROLLBACK-INBOX-MOBILE.md](./PROTOCOLO-ROLLBACK-INBOX-MOBILE.md)  
+No usar este tag Accesibilidad para rollback de responsive (y viceversa).
+
 > Nota: al momento del tag puede haber WIP local sin commitear (oauth, round-robin, docs, etc.). El tag apunta al **último commit**, no al working tree. Ese WIP no forma parte del baseline de esta feature.
 
 ## 0. Checkpoint (ya ejecutado / repetir si se vuelve a partir)

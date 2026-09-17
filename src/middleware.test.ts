@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 //                      of the test is that these must survive onto whatever
 //                      response the middleware returns — including redirects.
 let mockUser: { id: string } | null = null;
+let getUserCalls = 0;
 let refreshedCookies: Array<{
   name: string;
   value: string;
@@ -28,6 +29,7 @@ vi.mock("@supabase/ssr", () => ({
       // refreshed inside getUser(), which rotates the refresh token and
       // pushes the new cookies through setAll() before resolving.
       getUser: async () => {
+        getUserCalls += 1;
         if (refreshedCookies.length) opts.cookies.setAll(refreshedCookies);
         return { data: { user: mockUser }, error: null };
       },
@@ -42,6 +44,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
   mockUser = null;
+  getUserCalls = 0;
   refreshedCookies = [];
 });
 
@@ -136,5 +139,66 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     // No redirect — the normal NextResponse.next() already carries cookies.
     expect(res.headers.get("location")).toBeNull();
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
+  });
+
+  it("redirects unauthenticated visitors away from /inventory and /flows", async () => {
+    mockUser = null;
+
+    for (const path of ["/inventory", "/flows", "/agents", "/notifications"]) {
+      const res = await middleware(new NextRequest(`https://app.test${path}`));
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/login");
+    }
+  });
+
+  it("returns 401 for private API routes without a session", async () => {
+    mockUser = null;
+
+    for (const path of [
+      "/api/account",
+      "/api/whatsapp/send",
+      "/api/automations",
+      "/api/ai/draft",
+    ]) {
+      const res = await middleware(new NextRequest(`https://app.test${path}`));
+      expect(res.status).toBe(401);
+      const body = await res.json();
+      expect(body.error).toBe("Unauthorized");
+    }
+  });
+
+  it("does not inspect or mutate cookies on POST /api/auth/login", async () => {
+    mockUser = { id: "user-1" };
+    refreshedCookies = [ROTATED];
+
+    const res = await middleware(
+      new NextRequest("https://app.test/api/auth/login", {
+        method: "POST",
+        headers: { cookie: `${ROTATED.name}=stale-refresh-token` },
+      }),
+    );
+
+    expect(getUserCalls).toBe(0);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.cookies.get(ROTATED.name)).toBeUndefined();
+  });
+
+  it("allows public API allowlist without a session", async () => {
+    mockUser = null;
+
+    for (const path of [
+      "/api/whatsapp/webhook",
+      "/api/billing/events",
+      "/api/v1/me",
+      "/api/automations/cron",
+      "/api/flows/cron",
+      "/api/appointments/cron",
+      "/api/invitations/tok_abc/peek",
+    ]) {
+      const res = await middleware(new NextRequest(`https://app.test${path}`));
+      expect(res.status).not.toBe(401);
+      expect(res.headers.get("location")).toBeNull();
+    }
   });
 });

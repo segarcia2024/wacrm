@@ -35,7 +35,8 @@ import {
   type InteractiveMessagePayload,
 } from '@/lib/whatsapp/interactive';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
-import { supabaseAdmin } from '@/lib/flows/admin-client';
+import { persistOutboundMessage } from '@/lib/whatsapp/persist-outbound';
+import { supabaseAdmin } from '@/lib/supabase/admin';
 import {
   phoneVariants,
   isRecipientNotAllowedError,
@@ -457,34 +458,27 @@ export async function sendMessageToConversation(
   const interactiveBody =
     messageType === 'interactive' ? interactivePayload!.body : null;
 
-  const { data: messageRecord, error: msgError } = await db
-    .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      contact_id: contact?.id ?? null,
-      sender_type: 'agent',
-      content_type: messageType,
-      content_text: interactiveBody ?? contentText ?? null,
-      media_url: mediaUrl || null,
-      template_name: templateName || null,
-      interactive_payload:
+  let messageRecord: { id: string };
+  try {
+    messageRecord = await persistOutboundMessage({
+      db,
+      conversationId,
+      contactId: contact?.id ?? null,
+      recipient: resolved,
+      senderType: 'agent',
+      contentType: messageType,
+      contentText: interactiveBody ?? contentText ?? null,
+      mediaUrl: mediaUrl || null,
+      templateName: templateName || null,
+      interactivePayload:
         messageType === 'interactive' ? interactivePayload : null,
-      message_id: waMessageId,
-      status: 'sent',
-      reply_to_message_id: replyToMessageId || null,
-      sender_identifier: resolved.value,
-      sender_identifier_type: resolved.type,
-    })
-    .select()
-    .single();
-
-  if (msgError) {
-    console.error('[send-message] error inserting sent message:', msgError);
-    throw new SendMessageError(
-      'db_error',
-      `Message sent to Meta but failed to save to DB: ${msgError.message}`,
-      500
-    );
+      messageId: waMessageId,
+      replyToMessageId: replyToMessageId || null,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'DB insert failed';
+    console.error('[send-message] error inserting sent message:', message);
+    throw new SendMessageError('db_error', message, 500);
   }
 
   const lastMessageText =
@@ -498,6 +492,8 @@ export async function sendMessageToConversation(
       last_message_text: lastMessageText,
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      // CRM 1.1: human agent reply → waiting on customer
+      operational_status: 'waiting_customer',
     })
     .eq('id', conversationId);
 

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
+import { isConversationInAgentScope } from "@/lib/inbox/conversations";
 import type { Conversation } from "@/types";
 
 /**
@@ -11,9 +13,14 @@ import type { Conversation } from "@/types";
  *
  * Lives on its own realtime channel (distinct from the inbox page's
  * "inbox-realtime") so both can coexist without sharing state.
+ *
+ * Scoped by RLS (`can_view_conversation`): agents/viewers only load
+ * assigned-to-self + unassigned rows. Client-side drops reassignments
+ * that leave that scope when realtime still delivers the UPDATE.
  */
 export function useTotalUnread(): number {
   const [total, setTotal] = useState(0);
+  const { user, canViewAllConversations } = useAuth();
 
   // Keep a live local mirror of {id: unread_count} so INSERT/UPDATE/DELETE
   // events can adjust the total in O(1) without refetching.
@@ -23,8 +30,7 @@ export function useTotalUnread(): number {
     const supabase = createClient();
     let cancelled = false;
 
-    // Initial load. RLS scopes this to the signed-in user automatically —
-    // no explicit user_id filter needed here.
+    // Initial load. RLS scopes this to conversations the user may see.
     (async () => {
       const { data, error } = await supabase
         .from("conversations")
@@ -54,7 +60,16 @@ export function useTotalUnread(): number {
             if (oldRow.id) map.delete(oldRow.id);
           } else {
             const row = payload.new as Conversation;
-            map.set(row.id, row.unread_count ?? 0);
+            const userId = user?.id;
+            if (
+              !canViewAllConversations &&
+              userId &&
+              !isConversationInAgentScope(row, userId)
+            ) {
+              map.delete(row.id);
+            } else {
+              map.set(row.id, row.unread_count ?? 0);
+            }
           }
           // Recompute — cheap, conversations per user stay small.
           let sum = 0;
@@ -68,7 +83,7 @@ export function useTotalUnread(): number {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [canViewAllConversations, user?.id]);
 
   return total;
 }

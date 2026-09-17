@@ -21,30 +21,40 @@ import { NextResponse } from "next/server";
 import type { PostgrestError } from "@supabase/supabase-js";
 
 import { hashInviteToken } from "@/lib/auth/invitations";
+import { isAccountRole } from "@/lib/auth/roles";
+import {
+  exceedsLicensedSeats,
+  loadSeatUsage,
+  roleConsumesSeat,
+  seatsExceededMessage,
+} from "@/lib/billing/seats";
+import { getClientIp } from "@/lib/http/client-ip";
 import {
   checkRateLimit,
   rateLimitResponse,
   RATE_LIMITS,
 } from "@/lib/rate-limit";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-
-function getClientIp(request: Request): string {
-  const xff = request.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  const xri = request.headers.get("x-real-ip");
-  if (xri) return xri.trim();
-  return "unknown";
-}
 
 function rpcErrorToResponse(err: PostgrestError): NextResponse {
   if (err.code === "42501") {
-    return NextResponse.json({ error: err.message }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   if (err.code === "22023") {
-    return NextResponse.json({ error: err.message }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invitation is invalid, expired, or already used." },
+      { status: 400 },
+    );
   }
   if (err.code === "23505") {
-    return NextResponse.json({ error: err.message }, { status: 409 });
+    return NextResponse.json(
+      {
+        error:
+          "Cannot join — your account already has data or you belong to another team.",
+      },
+      { status: 409 },
+    );
   }
   console.error("[redeem] unexpected RPC error:", err);
   return NextResponse.json(
@@ -58,7 +68,7 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const ip = getClientIp(request);
-  const limit = checkRateLimit(`redeem:${ip}`, RATE_LIMITS.invitationRedeem);
+  const limit = await checkRateLimit(`redeem:${ip}`, RATE_LIMITS.invitationRedeem);
   if (!limit.success) return rateLimitResponse(limit);
 
   const { token } = await params;
@@ -81,8 +91,32 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const tokenHash = hashInviteToken(token);
+  // The invitee is not a member yet — RLS would hide the target
+  // account's transactions. Service role is required for the check.
+  const admin = supabaseAdmin();
+  const { data: invite } = await admin
+    .from("account_invitations")
+    .select("account_id, role")
+    .eq("token_hash", tokenHash)
+    .is("accepted_at", null)
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+
+  if (invite && isAccountRole(invite.role) && roleConsumesSeat(invite.role)) {
+    const usage = await loadSeatUsage(admin, invite.account_id);
+    if (
+      exceedsLicensedSeats(usage, invite.role, { countPendingInvites: false })
+    ) {
+      return NextResponse.json(
+        { error: seatsExceededMessage(usage) },
+        { status: 409 },
+      );
+    }
+  }
+
   const { data: accountId, error } = await supabase.rpc("redeem_invitation", {
-    p_token_hash: hashInviteToken(token),
+    p_token_hash: tokenHash,
   });
 
   if (error) return rpcErrorToResponse(error);

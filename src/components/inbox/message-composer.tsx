@@ -29,6 +29,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -238,10 +239,18 @@ export function MessageComposer({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
+      // Fine pointer (mouse/trackpad): Enter sends, Shift+Enter newline.
+      // Coarse pointer (touch / soft keyboard): Enter inserts newline;
+      // the Send button is the primary action (WhatsApp-like on phone).
+      if (e.key !== "Enter" || e.shiftKey) return;
+      if (
+        typeof window !== "undefined" &&
+        window.matchMedia("(pointer: coarse)").matches
+      ) {
+        return;
       }
+      e.preventDefault();
+      handleSend();
     },
     [handleSend]
   );
@@ -536,7 +545,10 @@ export function MessageComposer({
   // ---- Render --------------------------------------------------------
 
   return (
-    <div className="border-t border-border bg-card p-3">
+    // shrink-0 keeps the composer from being crushed in the thread flex
+    // column. Bottom padding includes the iOS home-indicator inset so
+    // Send isn't under the safe area (viewport-fit=cover on root layout).
+    <div className="shrink-0 border-t border-border bg-card px-3 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]">
       {replyTo && (
         <div className="mb-2">
           <ReplyQuote
@@ -630,7 +642,84 @@ export function MessageComposer({
         </div>
       ) : (
         <div className="flex items-end gap-2">
-          {/* Attach menu — photo / video / document / voice. */}
+          {/* Mobile (<sm): one + menu with media / interactive / templates /
+              AI so the textarea keeps almost the full width. Desktop keeps
+              the historical icon row below (Fase 3 — INBOX-MOBILE-RESPONSIVE). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              disabled={readOnly || busy}
+              title={readOnly ? t("readOnlyTitle") : t("moreActions")}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:hidden"
+            >
+              {busy || drafting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="border-border bg-popover">
+              <DropdownMenuItem
+                disabled={inputsDisabled || busy}
+                onClick={() => imageInputRef.current?.click()}
+              >
+                <ImageIcon className="mr-2 h-4 w-4" />
+                {t("photo")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={inputsDisabled || busy}
+                onClick={() => videoInputRef.current?.click()}
+              >
+                <Video className="mr-2 h-4 w-4" />
+                {t("video")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={inputsDisabled || busy}
+                onClick={() => documentInputRef.current?.click()}
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                {t("document")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={inputsDisabled || busy}
+                onClick={() => void startRecording()}
+              >
+                <Mic className="mr-2 h-4 w-4" />
+                {t("voiceNote")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={inputsDisabled}
+                onClick={() => openInteractiveBuilder()}
+              >
+                <MessageSquareDashed className="mr-2 h-4 w-4" />
+                {t("interactiveMessage")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={inputsDisabled}
+                onClick={() => setQuickReplyOpen(true)}
+              >
+                <Zap className="mr-2 h-4 w-4" />
+                {t("quickReplies")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={readOnly}
+                onClick={onOpenTemplates}
+              >
+                <LayoutTemplate className="mr-2 h-4 w-4" />
+                {t("sendTemplate")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={readOnly || drafting || sessionExpired}
+                onClick={handleDraft}
+              >
+                <Sparkles className="mr-2 h-4 w-4" />
+                {t("draftWithAI")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Desktop (sm+): attach menu — photo / video / document / voice. */}
           <DropdownMenu>
             <DropdownMenuTrigger
               disabled={inputsDisabled || busy}
@@ -641,7 +730,7 @@ export function MessageComposer({
                     ? undefined
                     : t("attachMedia")
               }
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:inline-flex"
             >
               {busy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -669,8 +758,7 @@ export function MessageComposer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* + menu — interactive messages + quick replies. Gated on the
-              24h window like free-form text (interactive requires it). */}
+          {/* Desktop (sm+): + menu — interactive + quick replies. */}
           <DropdownMenu>
             <DropdownMenuTrigger
               disabled={inputsDisabled}
@@ -681,7 +769,7 @@ export function MessageComposer({
                     ? undefined
                     : t("moreActions")
               }
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:inline-flex"
             >
               <Plus className="h-4 w-4" />
             </DropdownMenuTrigger>
@@ -703,7 +791,7 @@ export function MessageComposer({
             canAct={!readOnly}
             gateReason="send messages"
             title={readOnly ? undefined : t("sendTemplate")}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+            className="hidden h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground sm:inline-flex"
             onClick={onOpenTemplates}
           >
             <LayoutTemplate className="h-4 w-4" />
@@ -716,7 +804,7 @@ export function MessageComposer({
             gateReason="send messages"
             disabled={drafting}
             title={readOnly ? undefined : t("draftWithAI")}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-primary"
+            className="hidden h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-primary sm:inline-flex"
             onClick={handleDraft}
           >
             {drafting ? (
@@ -740,12 +828,16 @@ export function MessageComposer({
             }
             disabled={sessionExpired || readOnly}
             rows={1}
+            // Soft keyboards: "return" inserts a newline; Send is the
+            // primary action. Desktop Enter-to-send is handled in
+            // handleKeyDown via (pointer: fine).
+            enterKeyHint="enter"
             // Textarea keeps its own inline title — the GatedButton
             // wrapping pattern doesn't apply to non-button inputs.
             // The placeholder text also surfaces the read-only state.
             title={readOnly ? t("readOnlyTitle") : undefined}
             className={cn(
-              "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
+              "min-w-0 flex-1 resize-none rounded-xl border border-border bg-muted px-3 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50 sm:px-4",
               (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
             )}
           />
@@ -763,11 +855,11 @@ export function MessageComposer({
         </div>
       )}
 
-      {/* Hint sits outside the flex row so its height doesn't push
-          `items-end` buttons below the textarea. Indented to line up
-          under the textarea left edge. */}
+      {/* AI draft hint — desktop only. On mobile the ✨ lives inside the
+          consolidated + menu, and the old pl-[5.5rem] indent assumed four
+          icon buttons before the textarea. */}
       {!draft && !recording && (
-        <p className="mt-1 pl-[5.5rem] text-[10px] text-muted-foreground">
+        <p className="mt-1 hidden pl-[5.5rem] text-[10px] text-muted-foreground sm:block">
           {t("draftHint")}
         </p>
       )}

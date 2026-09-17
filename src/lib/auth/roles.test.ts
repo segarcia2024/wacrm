@@ -4,9 +4,12 @@ import {
   type AccountRole,
   canDeleteAccount,
   canEditSettings,
+  canExportContacts,
   canManageMembers,
   canSendMessages,
   canTransferOwnership,
+  canViewAllConversations,
+  canViewAllDeals,
   canViewOnly,
   hasMinRole,
   isAccountRole,
@@ -126,5 +129,26 @@ describe("capability predicates", () => {
     expect(canTransferOwnership("admin")).toBe(false);
     expect(canTransferOwnership("agent")).toBe(false);
     expect(canTransferOwnership("viewer")).toBe(false);
+  });
+
+  it("canViewAllConversations: admin+ only", () => {
+    expect(canViewAllConversations("owner")).toBe(true);
+    expect(canViewAllConversations("admin")).toBe(true);
+    expect(canViewAllConversations("agent")).toBe(false);
+    expect(canViewAllConversations("viewer")).toBe(false);
+  });
+
+  it("canViewAllDeals: admin+ only", () => {
+    expect(canViewAllDeals("owner")).toBe(true);
+    expect(canViewAllDeals("admin")).toBe(true);
+    expect(canViewAllDeals("agent")).toBe(false);
+    expect(canViewAllDeals("viewer")).toBe(false);
+  });
+
+  it("canExportContacts: admin+ only", () => {
+    expect(canExportContacts("owner")).toBe(true);
+    expect(canExportContacts("admin")).toBe(true);
+    expect(canExportContacts("agent")).toBe(false);
+    expect(canExportContacts("viewer")).toBe(false);
   });
 });

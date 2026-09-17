@@ -11,6 +11,7 @@ import {
   validateStepsForActivation,
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
+import { dbErrorResponse, internalErrorResponse } from '@/lib/http/errors'
 
 async function requireUser() {
   const supabase = await createClient()
@@ -36,7 +37,7 @@ export async function GET(
     .eq('user_id', user.id)
     .maybeSingle()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return dbErrorResponse('automations/[id]/GET', error)
   if (!automation) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const steps = await loadStepsTree(id)
@@ -120,12 +121,12 @@ export async function PATCH(
       .from('automations')
       .update(update)
       .eq('id', id)
-    if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 })
+    if (updErr) return dbErrorResponse('automations/[id]/PATCH', updErr)
   }
 
   if (Array.isArray(body.steps)) {
     const err = await replaceSteps(id, body.steps as BuilderStepInput[])
-    if (err) return NextResponse.json({ error: err }, { status: 500 })
+    if (err) return internalErrorResponse('automations/[id]/PATCH/steps', err)
   }
 
   return NextResponse.json({ ok: true })
@@ -153,6 +154,6 @@ export async function DELETE(
     .delete()
     .eq('id', id)
     .eq('user_id', user.id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return dbErrorResponse('automations/[id]/DELETE', error)
   return NextResponse.json({ ok: true })
 }

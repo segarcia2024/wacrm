@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Check, Loader2, Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -14,12 +15,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import {
   ADVISOR_MONTHLY_PRICE_COP,
   BILLING_CYCLES,
-  BILLING_CYCLE_LABELS,
   calculateDiscountedMonthlyPriceCOP,
   calculateSubscriptionTotalCOP,
   getBillingCycleDiscountPercent,
@@ -44,16 +44,17 @@ function formatCOP(value: number): string {
   return copFormatter.format(value);
 }
 
-const planFeatures = [
-  "Inbox de WhatsApp compartido",
-  "Pipeline comercial ilimitado",
-  "Contactos y etiquetas automotrices",
-  "Automatizaciones y respuestas rápidas",
-  "Soporte por correo en horario laboral",
-] as const;
-
 export function PricingTable() {
+  const t = useTranslations("Billing.pricing");
   const router = useRouter();
+  const cycleLabel = (cycle: BillingCycleMonths) => t(`cycle${cycle}`);
+  const planFeatures = [
+    t("featureInbox"),
+    t("featurePipeline"),
+    t("featureContacts"),
+    t("featureAutomations"),
+    t("featureSupport"),
+  ] as const;
   const [loading, setLoading] = useState(false);
   const [seats, setSeats] = useState(1);
   const [billingCycle, setBillingCycle] = useState<BillingCycleMonths>(1);
@@ -107,75 +108,74 @@ export function PricingTable() {
           return;
         }
         if (error.status === 403) {
-          toast.error("Permisos insuficientes", {
-            description:
-              "Solo un administrador del concesionario puede contratar licencias.",
+          toast.error(t("insufficientTitle"), {
+            description: t("insufficientDesc"),
           });
           return;
         }
-        toast.error("No pudimos iniciar el pago", {
+        toast.error(t("checkoutFailed"), {
           description: error.message,
         });
         return;
       }
 
-      toast.error("No pudimos iniciar el pago", {
+      toast.error(t("checkoutFailed"), {
         description:
-          error instanceof Error
-            ? error.message
-            : "Intente de nuevo en unos minutos.",
+          error instanceof Error ? error.message : t("retryLater"),
       });
     } finally {
       setLoading(false);
     }
-  }, [router, seats, billingCycle]);
+  }, [router, seats, billingCycle, t]);
 
   return (
-    <Card className="mx-auto w-full max-w-xl border-primary/25 bg-card shadow-lg shadow-primary/5">
-      <CardHeader className="items-center text-center">
+    <Card className="mx-auto w-full max-w-xl overflow-hidden border-primary/25 bg-card shadow-lg shadow-primary/5">
+      <CardHeader className="items-center px-4 text-center sm:px-6">
         <Badge variant="secondary" className="mb-2">
-          Plan recomendado
+          {t("badge")}
         </Badge>
-        <CardTitle className="text-xl sm:text-2xl">Asesor</CardTitle>
-        <CardDescription>
-          Calcule el costo de su equipo según usuarios y ciclo de facturación
+        <CardTitle className="text-xl sm:text-2xl">{t("planName")}</CardTitle>
+        <CardDescription className="text-pretty">
+          {t("planDescription")}
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-6">
+      <CardContent className="space-y-5 px-4 sm:space-y-6 sm:px-6">
         <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">Usuarios (asesores)</p>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+            <p className="text-sm font-medium">{t("seatsLabel")}</p>
             <span className="text-xs text-muted-foreground">
-              Mínimo 1 · Máximo {MAX_SEATS_PER_CHECKOUT}
+              {t("seatsRange", { max: MAX_SEATS_PER_CHECKOUT })}
             </span>
           </div>
-          <div className="flex items-center justify-center gap-3">
+          <div className="flex items-center justify-center gap-4 sm:gap-5">
             <Button
               type="button"
               variant="outline"
               size="icon"
-              className="size-9 shrink-0"
+              className="size-10 shrink-0 rounded-full sm:size-9"
               onClick={decrementSeats}
               disabled={loading || seats <= 1}
-              aria-label="Reducir usuarios"
+              aria-label={t("decreaseSeats")}
             >
               <Minus className="size-4" />
             </Button>
-            <div className="flex min-w-16 flex-col items-center">
-              <span className="text-3xl font-bold tabular-nums">{seats}</span>
-              <span className="text-xs text-muted-foreground">
-                {seats === 1 ? "usuario" : "usuarios"}
+            <div className="flex min-w-20 flex-col items-center">
+              <span className="text-3xl font-bold tabular-nums leading-none sm:text-4xl">
+                {seats}
+              </span>
+              <span className="mt-1 text-xs text-muted-foreground">
+                {seats === 1 ? t("userOne") : t("userMany")}
               </span>
             </div>
             <Button
               type="button"
               variant="outline"
               size="icon"
-              className="size-9 shrink-0"
+              className="size-10 shrink-0 rounded-full sm:size-9"
               onClick={incrementSeats}
               disabled={loading || seats >= MAX_SEATS_PER_CHECKOUT}
-              aria-label="Aumentar usuarios"
+              aria-label={t("increaseSeats")}
             >
               <Plus className="size-4" />
             </Button>
@@ -183,73 +183,104 @@ export function PricingTable() {
         </div>
 
         <div className="space-y-3">
-          <p className="text-sm font-medium">Ciclo de facturación</p>
-          <Tabs
-            value={String(billingCycle)}
-            onValueChange={(value) =>
-              setBillingCycle(Number(value) as BillingCycleMonths)
-            }
-            className="w-full"
+          <p className="text-sm font-medium">{t("cycleLabel")}</p>
+          {/*
+            Botones propios en grid (no TabsList): el Tabs de la UI fija
+            h-8 en orientación horizontal y hacía desbordar Semestral/Anual
+            encima del precio en viewports estrechos.
+          */}
+          <div
+            role="radiogroup"
+            aria-label={t("cycleAria")}
+            className="grid grid-cols-2 gap-2 sm:grid-cols-4"
           >
-            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-4">
-              {BILLING_CYCLES.map((cycle) => {
-                const cycleDiscount = getBillingCycleDiscountPercent(cycle);
-                return (
-                  <TabsTrigger
-                    key={cycle}
-                    value={String(cycle)}
-                    disabled={loading}
-                    className="flex h-auto min-h-10 flex-col gap-0.5 py-2 text-xs sm:text-sm"
-                  >
-                    <span>{BILLING_CYCLE_LABELS[cycle]}</span>
-                    {cycleDiscount > 0 ? (
-                      <span className="text-[10px] font-normal text-success">
-                        −{cycleDiscount}%
-                      </span>
-                    ) : null}
-                  </TabsTrigger>
-                );
-              })}
-            </TabsList>
-          </Tabs>
+            {BILLING_CYCLES.map((cycle) => {
+              const cycleDiscount = getBillingCycleDiscountPercent(cycle);
+              const selected = billingCycle === cycle;
+              return (
+                <button
+                  key={cycle}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  disabled={loading}
+                  onClick={() => setBillingCycle(cycle)}
+                  className={cn(
+                    "flex min-h-12 w-full flex-col items-center justify-center gap-0.5 rounded-lg border px-2 py-2.5 text-center transition-colors",
+                    "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                    "disabled:pointer-events-none disabled:opacity-50",
+                    selected
+                      ? "border-border bg-background text-foreground shadow-sm"
+                      : "border-transparent bg-muted text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <span className="text-xs font-medium leading-tight sm:text-sm">
+                    {cycleLabel(cycle)}
+                  </span>
+                  {cycleDiscount > 0 ? (
+                    <span className="text-[10px] font-medium leading-none text-success sm:text-[11px]">
+                      −{cycleDiscount}%
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-normal leading-none text-muted-foreground/70 sm:text-[11px]">
+                      {t("noDiscount")}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="rounded-lg border border-border bg-muted/30 p-4">
-          <div className="flex flex-wrap items-baseline justify-center gap-x-2 gap-y-1">
+        <div className="rounded-lg border border-border bg-muted/30 p-3 sm:p-4">
+          <div className="flex flex-col items-center gap-1 text-center sm:gap-1.5">
             {hasDiscount ? (
-              <span className="text-lg text-muted-foreground line-through">
+              <span className="text-sm text-muted-foreground line-through sm:text-base">
                 {formatCOP(ADVISOR_MONTHLY_PRICE_COP)}
               </span>
             ) : null}
-            <span className="text-4xl font-bold tracking-tight tabular-nums sm:text-5xl">
-              {formatCOP(discountedMonthlyPrice)}
-            </span>
-            <span className="text-sm text-muted-foreground">/ mes por usuario</span>
+            <div className="flex flex-wrap items-baseline justify-center gap-x-2 gap-y-0.5">
+              <span className="text-3xl font-bold tracking-tight tabular-nums sm:text-4xl md:text-5xl">
+                {formatCOP(discountedMonthlyPrice)}
+              </span>
+              <span className="text-xs text-muted-foreground sm:text-sm">
+                {t("perMonthUser")}
+              </span>
+            </div>
           </div>
           {hasDiscount ? (
             <p className="mt-2 text-center text-xs text-success">
-              Ahorra {discountPercent}% pagando{" "}
-              {BILLING_CYCLE_LABELS[billingCycle].toLowerCase()}
+              {t("savePaying", {
+                percent: discountPercent,
+                cycle: cycleLabel(billingCycle).toLowerCase(),
+              })}
             </p>
           ) : (
             <p className="mt-2 text-center text-xs text-muted-foreground">
-              Facturación mensual · COP · por asesor
+              {t("monthlyBilling")}
             </p>
           )}
 
           <div className="mt-4 space-y-2 border-t border-border pt-4 text-sm">
-            <div className="flex items-center justify-between gap-2 text-muted-foreground">
-              <span>
-                {seats} {seats === 1 ? "usuario" : "usuarios"} ×{" "}
-                {billingCycle}{" "}
-                {billingCycle === 1 ? "mes" : "meses"}
-                {hasDiscount ? ` (−${discountPercent}%)` : ""}
+            <div className="flex items-start justify-between gap-3 text-muted-foreground">
+              <span className="min-w-0 text-left leading-snug">
+                {t("lineItem", {
+                  seats,
+                  users: seats === 1 ? t("userOne") : t("userMany"),
+                  months: billingCycle,
+                  monthWord: billingCycle === 1 ? t("monthOne") : t("monthMany"),
+                  discount: hasDiscount ? ` (−${discountPercent}%)` : "",
+                })}
               </span>
-              <span className="tabular-nums">{formatCOP(totalToday)}</span>
+              <span className="shrink-0 tabular-nums">
+                {formatCOP(totalToday)}
+              </span>
             </div>
-            <div className="flex items-center justify-between gap-2 font-semibold text-foreground">
-              <span>Total a pagar hoy</span>
-              <span className="text-lg tabular-nums">{formatCOP(totalToday)}</span>
+            <div className="flex items-center justify-between gap-3 font-semibold text-foreground">
+              <span>{t("totalToday")}</span>
+              <span className="shrink-0 text-base tabular-nums sm:text-lg">
+                {formatCOP(totalToday)}
+              </span>
             </div>
           </div>
         </div>
@@ -261,15 +292,15 @@ export function PricingTable() {
                 className="mt-0.5 size-4 shrink-0 text-success"
                 aria-hidden
               />
-              <span>{feature}</span>
+              <span className="text-pretty">{feature}</span>
             </li>
           ))}
         </ul>
       </CardContent>
 
-      <CardFooter className="flex-col gap-3 border-t border-border bg-muted/30">
+      <CardFooter className="flex-col gap-3 border-t border-border bg-muted/30 px-4 sm:px-6">
         <Button
-          className="h-10 w-full"
+          className="h-11 w-full sm:h-10"
           size="lg"
           disabled={loading}
           onClick={handleSubscribe}
@@ -277,14 +308,16 @@ export function PricingTable() {
           {loading ? (
             <>
               <Loader2 className="animate-spin" />
-              Preparando pago…
+              {t("preparing")}
             </>
           ) : (
-            `Contratar por ${formatCOP(totalToday)}`
+            <span className="truncate">
+              {t("subscribe", { amount: formatCOP(totalToday) })}
+            </span>
           )}
         </Button>
         <p className="text-center text-xs text-muted-foreground">
-          Pago seguro vía Wompi. Cancele cuando quiera.
+          {t("secureNote")}
         </p>
       </CardFooter>
     </Card>

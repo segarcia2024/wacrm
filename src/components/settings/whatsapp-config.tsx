@@ -29,6 +29,7 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion';
+import { EmbeddedSignupButton } from '@/components/whatsapp/EmbeddedSignupButton';
 import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
 import type { ReactNode } from 'react';
 
@@ -456,6 +457,32 @@ export function WhatsAppConfig() {
                 t('notConnectedDesc')}
           </AlertDescription>
         </Alert>
+
+        {/* Embedded Signup — automated dealer onboarding via Meta */}
+        <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+          <div>
+            <h3 className="text-sm font-medium text-foreground">
+              Connect with Meta Embedded Signup
+            </h3>
+            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+              Launch Meta&apos;s guided flow to link this account&apos;s WhatsApp
+              Business number automatically. Credentials are encrypted and stored
+              for your organization — no manual token paste required.
+            </p>
+          </div>
+          <EmbeddedSignupButton
+            onSuccess={async (result) => {
+              setConnectionStatus('connected');
+              setResetReason(null);
+              setStatusMessage('');
+              if (result.phone_number_id) setPhoneNumberId(result.phone_number_id);
+              if (result.waba_id) setWabaId(result.waba_id);
+              setAccessToken(MASKED_TOKEN);
+              setTokenEdited(false);
+              if (accountId) await fetchConfig(accountId);
+            }}
+          />
+        </div>
 
         {/* Registration Status — the "is it actually live?" check.
             Credentials being valid is necessary but not sufficient;

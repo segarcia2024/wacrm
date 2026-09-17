@@ -18,7 +18,11 @@ import {
   resolveWhatsAppRecipient,
 } from '@/lib/whatsapp/wa-identity'
 import { toMetaMessageAddress } from '@/lib/whatsapp/recipient-resolver'
-import { supabaseAdmin } from './admin-client'
+import {
+  persistOutboundMessage,
+  touchConversationPreview,
+} from '@/lib/whatsapp/persist-outbound'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 function requireOutboundRecipient(contact: {
   phone?: string | null
@@ -137,27 +141,19 @@ export async function engineSendText(
     await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
   }
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: args.conversationId,
-    sender_type: 'bot',
-    content_type: 'text',
-    content_text: args.text,
-    message_id: waMessageId,
-    status: 'sent',
-    ai_generated: args.aiGenerated ?? false,
+  await persistOutboundMessage({
+    db,
+    conversationId: args.conversationId,
+    contactId: contact.id,
+    recipient: resolved,
+    senderType: 'bot',
+    contentType: 'text',
+    contentText: args.text,
+    messageId: waMessageId,
+    aiGenerated: args.aiGenerated ?? false,
   })
-  if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
-  }
 
-  await db
-    .from('conversations')
-    .update({
-      last_message_text: args.text,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', args.conversationId)
+  await touchConversationPreview(db, args.conversationId, args.text)
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -254,26 +250,18 @@ export async function engineSendMedia(
   // content_text carries the caption (or empty) so the conversation
   // list preview shows something meaningful when the user glances at it.
   const preview = args.caption?.trim() || `[${args.kind}]`
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: args.conversationId,
-    sender_type: 'bot',
-    content_type: args.kind,
-    content_text: args.caption ?? null,
-    message_id: waMessageId,
-    status: 'sent',
+  await persistOutboundMessage({
+    db,
+    conversationId: args.conversationId,
+    contactId: contact.id,
+    recipient: resolved,
+    senderType: 'bot',
+    contentType: args.kind,
+    contentText: args.caption ?? null,
+    messageId: waMessageId,
   })
-  if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
-  }
 
-  await db
-    .from('conversations')
-    .update({
-      last_message_text: preview,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', args.conversationId)
+  await touchConversationPreview(db, args.conversationId, preview)
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -445,27 +433,19 @@ async function sendInteractiveViaMeta(
           sections: input.sections,
         }
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: input.conversationId,
-    sender_type: 'bot',
-    content_type: 'interactive',
-    content_text: input.bodyText,
-    interactive_payload: interactivePayload,
-    message_id: waMessageId,
-    status: 'sent',
+  await persistOutboundMessage({
+    db,
+    conversationId: input.conversationId,
+    contactId: input.contactId,
+    recipient: resolved,
+    senderType: 'bot',
+    contentType: 'interactive',
+    contentText: input.bodyText,
+    interactivePayload,
+    messageId: waMessageId,
   })
-  if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
-  }
 
-  await db
-    .from('conversations')
-    .update({
-      last_message_text: input.bodyText,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', input.conversationId)
+  await touchConversationPreview(db, input.conversationId, input.bodyText)
 
   return { whatsapp_message_id: waMessageId }
 }

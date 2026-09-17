@@ -28,14 +28,20 @@ export default function ForgotPasswordPage() {
     setError(null);
     setLoading(true);
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
-    });
-
-    if (error) {
-      setError(error.message);
+    const trimmed = email.trim();
+    if (!trimmed || trimmed.length > 320) {
+      setError("Introduce un email válido.");
       setLoading(false);
       return;
+    }
+
+    // Always show the same success UI whether or not the mailbox exists —
+    // echoing Supabase error messages would enable account enumeration.
+    const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
+      redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+    });
+    if (error) {
+      console.error("[forgot-password]", error.message);
     }
 
     setSuccess(true);

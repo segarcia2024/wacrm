@@ -42,7 +42,7 @@ wacrm/
 │   ├── lib/                    # Lógica de negocio (whatsapp, billing, ai, …)
 │   ├── hooks/
 │   └── i18n/                   # next-intl (locale por defecto es-CO)
-├── supabase/migrations/        # Esquema Postgres versionado (001–040)
+├── supabase/migrations/        # Esquema Postgres versionado (001–051)
 ├── mcp-server/                 # Servidor MCP opcional sobre /api/v1
 └── docs/                       # API pública, MCP
 ```
@@ -76,7 +76,7 @@ wacrm/
 
 ## 3. Base de datos (Supabase / Postgres)
 
-Las **40 migraciones** en `supabase/migrations/` definen el esquema. Todas las tablas de dominio llevan `account_id` desde la migración `017_account_sharing.sql`. RLS impide acceso cross-tenant.
+Las **51 migraciones** en `supabase/migrations/` definen el esquema (`001`–`051`). Todas las tablas de dominio llevan `account_id` desde la migración `017_account_sharing.sql`. RLS impide acceso cross-tenant.
 
 ### 3.1 Tenancy y usuarios
 
@@ -113,6 +113,8 @@ Las **40 migraciones** en `supabase/migrations/` definen el esquema. Todas las t
 |-------|-----------|
 | `pipelines`, `pipeline_stages` | Embudos comerciales |
 | `deals` | Oportunidades; valor en COP entero |
+| `vehicles` | Inventario de carros (placa, precio COP, estado available/reserved/sold) |
+| `appointments` | Citas (showroom, test drive, llamada, entrega); agenda semanal |
 
 ### 3.5 Marketing y automatización
 
@@ -129,6 +131,8 @@ Las **40 migraciones** en `supabase/migrations/` definen el esquema. Todas las t
 | `ai_configs` | Config BYOK por cuenta |
 | `ai_knowledge_documents`, `ai_knowledge_chunks` | Base de conocimiento (FTS + pgvector opcional) |
 | `ai_usage_log` | Telemetría de tokens |
+
+El asistente de WhatsApp (BYOK) puede **llamar herramientas** contra `vehicles` y `appointments` (consulta de stock en vivo, precios COP, y —solo en auto-reply— alta de citas en la agenda). No hay function calling persistido: los turnos `tool` viven solo en el bucle de generación.
 
 ### 3.7 Plataforma e integraciones
 
@@ -150,7 +154,7 @@ Las **40 migraciones** en `supabase/migrations/` definen el esquema. Todas las t
 | `billing_cycle_months` | 1, 3, 6 o 12 (migración 040) |
 | `includes_setup_fee` | Flag contable setup fee (migración 039) |
 
-> **Nota:** El esquema está preparado para reconciliar pagos; la confirmación asíncrona vía **Eventos Wompi** (webhook de pasarela) es el siguiente paso natural de producción. Hoy el checkout confirma en el **callback del widget** en el navegador y la fila queda en `pending` hasta reconciliación manual o futuro webhook.
+> **Reconciliación:** `POST /api/billing/events` verifica el checksum de Eventos Wompi y actualiza `transactions.status`. Sin `WOMPI_EVENTS_SECRET` el endpoint responde 503. El widget del navegador solo informa UX; la licencia se aplica cuando el evento llega `approved`. Las invitaciones de asesor se bloquean si ya no hay asientos.
 
 ### Diagrama entidad-relación (simplificado)
 
@@ -230,7 +234,8 @@ sequenceDiagram
   Admin->>Wompi: Tarjeta / PSE
   Wompi->>Bank: Cobro
   Wompi-->>UI: callback APPROVED | DECLINED | PENDING
-  Note over DB: Reconciliación async vía Eventos Wompi (roadmap)
+  Wompi->>API: Eventos /api/billing/events (checksum)
+  API->>DB: UPDATE transactions.status
 ```
 
 **Fórmula de precio (COP):**
@@ -277,7 +282,7 @@ Basado en `git log` (remoto: `segaria2024/wacrm`, fork de la plantilla **ArnasDo
 | Área | Commits recientes |
 |------|-------------------|
 | Inbox / WhatsApp | Mensajes interactivos (botones/listas), deduplicación de conversaciones |
-| IA | Auto-reply, knowledge base, dashboard de uso |
+| IA | Auto-reply, knowledge base, herramientas de inventario y agenda |
 | Seguridad | Parches GHSA (SSRF, authz en rutas service-role) |
 | Integraciones | Servidor MCP sobre API pública |
 | REVIO (local) | Facturación Wompi, COP, calculadora B2B, migraciones 037–040 |

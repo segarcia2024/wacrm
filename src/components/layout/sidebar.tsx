@@ -92,6 +92,10 @@ interface NavItem {
   beta?: boolean;
   /** Hide from agents/viewers — inventory CRUD is admin/owner only. */
   adminOnly?: boolean;
+  /** Hide from agent/viewer commercial roles (CRM 1.1). */
+  hideFromAgents?: boolean;
+  /** Move off primary nav; still reachable by URL (CRM 1.1). */
+  secondaryOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -102,10 +106,10 @@ const navItems: NavItem[] = [
   { href: "/pipelines", labelKey: "pipelines", icon: GitBranch },
   { href: "/inventory", labelKey: "inventory", icon: Car, adminOnly: true },
   { href: "/agenda", labelKey: "agenda", icon: CalendarDays },
-  { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
+  { href: "/broadcasts", labelKey: "broadcasts", icon: Radio, secondaryOnly: true },
   { href: "/automations", labelKey: "automations", icon: Zap },
-  { href: "/flows", labelKey: "flows", icon: Workflow, beta: true },
-  { href: "/agents", labelKey: "aiAgents", icon: Bot },
+  { href: "/flows", labelKey: "flows", icon: Workflow, beta: true, hideFromAgents: true },
+  { href: "/agents", labelKey: "aiAgents", icon: Bot, hideFromAgents: true },
 ];
 
 const bottomNavItems = [
@@ -133,9 +137,17 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   } = useAuth();
   const totalUnread = useTotalUnread();
   const unreadNotifications = useUnreadNotifications();
-  const visibleNavItems = navItems.filter(
-    (item) => !item.adminOnly || canEditSettings,
-  );
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.adminOnly && !canEditSettings) return false;
+    if (item.secondaryOnly) return false;
+    if (
+      item.hideFromAgents &&
+      (accountRole === "agent" || accountRole === "viewer")
+    ) {
+      return false;
+    }
+    return true;
+  });
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it

@@ -6,6 +6,7 @@ import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
+import { CRM_TOOLS } from '@/lib/ai/tools/definitions'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 
 // Keep the tested transcript bounded, mirroring the live context window.
@@ -15,17 +16,18 @@ const MAX_TURNS = 20
  * POST /api/ai/playground  (agent+)
  *
  * Test-chat with the account's agent WITHOUT touching WhatsApp. Runs the
- * exact same path the auto-reply bot uses — knowledge-base retrieval +
- * `auto_reply` system prompt + the configured provider — so what you see
- * here is what a real customer would get. Reads the config even when the
- * master switch is off (requireActive:false) so you can try it before
- * going live. Stateless: the client sends the running transcript each turn.
+ * same retrieval + `auto_reply` prompt + provider as the bot, including
+ * live inventory lookup. Appointment *creation* is disabled here (no
+ * customer thread) so a playground test cannot write to the agenda.
+ * Reads the config even when the master switch is off
+ * (`requireActive:false`) so you can try it before going live.
+ * Stateless: the client sends the running transcript each turn.
  */
 export async function POST(request: Request) {
   try {
     const { supabase, accountId, userId } = await requireRole('agent')
 
-    const limit = checkRateLimit(`ai-playground:${userId}`, RATE_LIMITS.aiDraft)
+    const limit = await checkRateLimit(`ai-playground:${userId}`, RATE_LIMITS.aiDraft)
     if (!limit.success) return rateLimitResponse(limit)
 
     const body = await request.json().catch(() => null)
@@ -82,9 +84,21 @@ export async function POST(request: Request) {
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      tools: { allowWrites: false },
     })
 
-    const { text, handoff } = await generateReply({ config, systemPrompt, messages })
+    const { text, handoff } = await generateReply({
+      config,
+      systemPrompt,
+      messages,
+      tools: CRM_TOOLS,
+      toolContext: {
+        db: supabase,
+        accountId,
+        actorUserId: userId,
+        allowWrites: false,
+      },
+    })
     return NextResponse.json({ reply: text, handoff })
   } catch (err) {
     if (err instanceof AiError) {

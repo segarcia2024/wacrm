@@ -1,7 +1,17 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { dbErrorResponse } from '@/lib/http/errors'
+import { parseJsonBody } from '@/lib/http/parse-body'
 import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
+
+const createQuickReplySchema = z.object({
+  title: z.string().trim().min(1, 'title is required').max(200),
+  kind: z.enum(['text', 'interactive']).optional(),
+  content_text: z.string().max(4096).optional(),
+  interactive_payload: z.unknown().optional(),
+})
 
 // Quick replies — reusable snippets (plain text or a saved interactive
 // message) shared across the account. GET lists; POST creates. Mirrors
@@ -16,7 +26,7 @@ export async function GET() {
       .from('quick_replies')
       .select('*')
       .order('created_at', { ascending: false })
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return dbErrorResponse('quick-replies/GET', error)
     return NextResponse.json({ quick_replies: data ?? [] })
   } catch (err) {
     return toErrorResponse(err)
@@ -31,14 +41,12 @@ export async function POST(request: Request) {
     return toErrorResponse(err)
   }
 
-  const body = await request.json().catch(() => null)
-  if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  const parsed = await parseJsonBody(request, createQuickReplySchema)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.data
 
-  const title = typeof body.title === 'string' ? body.title.trim() : ''
+  const title = body.title
   const kind = body.kind === 'interactive' ? 'interactive' : 'text'
-  if (!title) {
-    return NextResponse.json({ error: 'title is required' }, { status: 400 })
-  }
 
   let content_text: string | null = null
   let interactive_payload: unknown = null
@@ -50,7 +58,7 @@ export async function POST(request: Request) {
     }
     interactive_payload = body.interactive_payload
   } else {
-    const text = typeof body.content_text === 'string' ? body.content_text : ''
+    const text = body.content_text ?? ''
     if (!text.trim()) {
       return NextResponse.json(
         { error: 'content_text is required for text quick replies' },
@@ -73,8 +81,6 @@ export async function POST(request: Request) {
     .select()
     .single()
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+  if (error) return dbErrorResponse('quick-replies/POST', error)
   return NextResponse.json({ quick_reply: data }, { status: 201 })
 }

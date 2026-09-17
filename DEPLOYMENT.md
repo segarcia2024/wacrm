@@ -21,9 +21,9 @@ Guía para operadores que despliegan el CRM en un **VPS propio** con **Docker**.
 - **Docker** 24+ y **Docker Compose** v2 (`docker compose`)
 - **Git** (para clonar el repositorio)
 - **Reverse proxy** con TLS (Nginx, Caddy o Traefik) apuntando al contenedor en `:3000`
-- Cuenta **Supabase** con migraciones `001`–`040` aplicadas
+- Cuenta **Supabase** con migraciones `001`–`057` aplicadas
 - App **Meta for Developers** con webhook HTTPS hacia `https://<dominio>/api/whatsapp/webhook`
-- Cuenta **Wompi** (producción) con llaves `pub_prod_…` e integridad de producción
+- Cuenta **Wompi** (producción) con llaves `pub_prod_…`, integridad y **Eventos** hacia `https://<dominio>/api/billing/events`
 
 ### Servicios externos (no van en Docker)
 
@@ -32,7 +32,7 @@ Guía para operadores que despliegan el CRM en un **VPS propio** con **Docker**.
 | Supabase | Postgres, Auth, Storage, Realtime |
 | Meta Cloud API | WhatsApp Business |
 | Wompi | Pagos COP (Web Checkout) |
-| Cron externo (opcional) | `GET /api/automations/cron` y `/api/flows/cron` con `AUTOMATION_CRON_SECRET` |
+| Cron externo (opcional) | `GET /api/automations/cron`, `/api/flows/cron`, `/api/appointments/cron` y `/api/sla/cron` con header `x-cron-secret` |
 
 ---
 
@@ -125,13 +125,13 @@ docker compose down --rmi local
 2. En Meta for Developers, URL del webhook: `https://<dominio>/api/whatsapp/webhook`.
 3. Verifique `GET` de verificación Meta (token en Settings → WhatsApp).
 4. En Wompi producción, confirme llaves y dominio permitido del widget.
-5. (Opcional) Cron cada minuto:
+5. (Opcional) Cron cada minuto — use el script `scripts/cron-jobs.sh` o las URLs individuales:
    ```bash
-   curl -fsS -H "Authorization: Bearer $AUTOMATION_CRON_SECRET" \
-     https://<dominio>/api/automations/cron
-   curl -fsS -H "Authorization: Bearer $AUTOMATION_CRON_SECRET" \
-     https://<dominio>/api/flows/cron
+   export CRM_BASE_URL="https://<dominio>"
+   export AUTOMATION_CRON_SECRET="…"
+   bash scripts/cron-jobs.sh
    ```
+   Endpoints incluidos: automations, flows, appointments y **SLA** (`/api/sla/cron`, alertas 5/10/15 min si `crm11_sla` está activo en Settings → CRM 1.1).
 
 ---
 
@@ -159,6 +159,7 @@ Copie `.env.example` → `.env` en el servidor. **Nunca** suba secretos a Git.
 | `NEXT_PUBLIC_WOMPI_ENV` | Sí | Ambiente Wompi en el browser (debe coincidir con las llaves). |
 | `NEXT_PUBLIC_WOMPI_PUBLIC_KEY` | Sí | Llave pública Wompi (`pub_test_…` o `pub_prod_…`). Widget Web Checkout. |
 | `WOMPI_INTEGRITY_SECRET` | **No** | Secreto de integridad Wompi. Firma SHA-256 del checkout server-side. |
+| `WOMPI_EVENTS_SECRET` | **No** | Secreto de Eventos Wompi (`test_events_…` / `prod_events_…`). Verifica `POST /api/billing/events`. Sin él el webhook responde 503. |
 
 ### 5.3 Runtime Docker / Node
 
@@ -173,7 +174,9 @@ Copie `.env.example` → `.env` en el servidor. **Nunca** suba secretos a Git.
 | Variable | Expuesta al cliente | Descripción |
 |----------|---------------------|-------------|
 | `ALLOWED_INVITE_HOSTS` | No | Lista CSV de hostnames permitidos en URLs de invitación (defensa extra si no usa `NEXT_PUBLIC_SITE_URL`). |
-| `AUTOMATION_CRON_SECRET` | **No** | Bearer secret para `GET /api/automations/cron` y `/api/flows/cron`. Requerido si usa pasos Wait en automatizaciones o flows programados. |
+| `UPSTASH_REDIS_REST_URL` | No | URL REST de Upstash. Si se define junto con el token, el rate limit es compartido entre instancias. |
+| `UPSTASH_REDIS_REST_TOKEN` | No | Token REST de Upstash. Sin ambas, el límite queda en memoria de proceso. |
+| `AUTOMATION_CRON_SECRET` | **No** | Header `x-cron-secret` para `GET /api/automations/cron`, `/api/flows/cron`, `/api/appointments/cron` y `/api/sla/cron`. Requerido si usa pasos Wait, recordatorios de citas o SLA CRM 1.1. |
 | `META_APP_ID` | No | App ID de Meta. Requerido para plantillas con encabezado IMAGE (Resumable Upload). |
 | `WHATSAPP_TEMPLATES_DRY_RUN` | No | `true`/`1`: omite Meta al enviar plantillas (solo dev/CI). **No usar en producción.** |
 | `AI_REQUEST_TIMEOUT_MS` | No | Timeout por llamada a OpenAI/Anthropic. Default `30000`. |
@@ -194,11 +197,14 @@ El paquete en `mcp-server/` es opcional. Variables en `mcp-server/.env`:
 
 ## 6. Checklist de producción
 
-- [ ] Migraciones Supabase 001–040 aplicadas
+- [ ] Migraciones Supabase 001–051 aplicadas
+- [ ] Eventos Wompi apuntan a `https://<dominio>/api/billing/events` y `WOMPI_EVENTS_SECRET` está configurado
 - [ ] `output: 'standalone'` en `next.config.ts` (ya configurado)
 - [ ] `.env` completo con variables obligatorias + Wompi producción
 - [ ] `docker compose build` exitoso
 - [ ] `docker compose up -d` + healthcheck OK
+- [ ] Auth → Password security: activar **Leaked password protection** (HaveIBeenPwned; plan Pro+)
+- [ ] Confirmar `WHATSAPP_TEMPLATES_DRY_RUN` no está en producción (el código lo ignora si `NODE_ENV=production`)
 - [ ] TLS terminado en proxy (HTTPS obligatorio para Meta)
 - [ ] Webhook Meta verificado
 - [ ] Prueba de checkout Wompi sandbox → producción

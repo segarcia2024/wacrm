@@ -1,6 +1,6 @@
-// Shared result shapes the dashboard components consume. Centralised
-// here so each component stays thin and the page-level loader wires
-// them up without type gymnastics.
+/**
+ * Shared result shapes the dashboard components consume.
+ */
 
 export interface MetricDelta {
   current: number
@@ -10,9 +10,37 @@ export interface MetricDelta {
 export interface MetricsBundle {
   activeConversations: MetricDelta
   newContactsToday: MetricDelta
+  /** Corrected: open status AND stage.outcome = open */
   openDealsValue: number
   openDealsCount: number
   messagesSentToday: MetricDelta
+  /** CRM 1.1 extended cards (optional when flag off consumers ignore) */
+  waitingTeam?: number
+  slaBreached?: number
+  appointmentsToday?: number
+  appointmentsUnconfirmed?: number
+  activeDeals?: number
+  separations?: number
+  wonThisMonth?: number
+  wonThisMonthValue?: number
+  waitingCustomer?: number
+  unassignedConversations?: number
+}
+
+export type DashboardPeriod =
+  | 'today'
+  | 'yesterday'
+  | 'last7'
+  | 'month'
+  | 'custom'
+
+export interface DashboardFilters {
+  period: DashboardPeriod
+  from?: string // ISO
+  to?: string // ISO
+  assigneeId?: string | null
+  locationId?: string | null
+  channel?: 'whatsapp' | 'all'
 }
 
 export interface ConversationsSeriesPoint {
@@ -27,6 +55,7 @@ export interface PipelineStageSlice {
   color: string
   dealCount: number
   totalValue: number
+  outcome?: 'open' | 'won' | 'lost'
 }
 
 export interface PipelineDonutData {
@@ -46,6 +75,9 @@ export interface ResponseTimeSummary {
   buckets: ResponseTimeBucket[]
   thisWeekAvg: number | null
   lastWeekAvg: number | null
+  medianMinutes?: number | null
+  p90Minutes?: number | null
+  withinTargetPct?: number | null
 }
 
 export type ActivityKind =

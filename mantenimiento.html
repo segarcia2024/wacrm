@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>REVIO — Sistema en actualización</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;1,9..40,400&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              asphalt: {
+                950: '#0a0e14',
+                900: '#111827',
+                800: '#1a2332',
+                700: '#243044',
+              },
+              steel: '#8b9bb4',
+              signal: '#55adfa',
+              teal: '#51b9a4',
+            },
+            fontFamily: {
+              display: ['"Barlow Condensed"', 'sans-serif'],
+              body: ['"DM Sans"', 'sans-serif'],
+            },
+            keyframes: {
+              rise: {
+                '0%': { opacity: '0', transform: 'translateY(12px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              },
+              scan: {
+                '0%': { transform: 'translateX(-120%)' },
+                '100%': { transform: 'translateX(220%)' },
+              },
+              pulse-line: {
+                '0%, 100%': { opacity: '0.35' },
+                '50%': { opacity: '0.85' },
+              },
+            },
+            animation: {
+              rise: 'rise 0.7s ease-out both',
+              'rise-delay': 'rise 0.7s ease-out 0.12s both',
+              'rise-delay-2': 'rise 0.7s ease-out 0.24s both',
+              scan: 'scan 4.5s ease-in-out infinite',
+              'pulse-line': 'pulse-line 2.8s ease-in-out infinite',
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      html,
+      body {
+        height: 100%;
+      }
+
+      .horizon-grid {
+        background-image:
+          linear-gradient(rgba(85, 173, 250, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(85, 173, 250, 0.06) 1px, transparent 1px);
+        background-size: 48px 48px;
+        mask-image: radial-gradient(ellipse 70% 55% at 50% 70%, black 10%, transparent 75%);
+      }
+
+      .chrome-rule {
+        background: linear-gradient(
+          90deg,
+          transparent 0%,
+          rgba(139, 155, 180, 0.15) 20%,
+          rgba(85, 173, 250, 0.55) 50%,
+          rgba(139, 155, 180, 0.15) 80%,
+          transparent 100%
+        );
+      }
+    </style>
+  </head>
+  <body
+    class="min-h-full bg-asphalt-950 font-body text-slate-200 antialiased selection:bg-signal/30"
+  >
+    <!-- Atmosphere -->
+    <div class="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden="true">
+      <div
+        class="absolute inset-0 bg-[radial-gradient(ellipse_90%_60%_at_50%_-10%,rgba(85,173,250,0.14),transparent_55%)]"
+      ></div>
+      <div
+        class="absolute inset-0 bg-[radial-gradient(ellipse_70%_50%_at_80%_100%,rgba(81,185,164,0.08),transparent_50%)]"
+      ></div>
+      <div class="horizon-grid absolute inset-0 opacity-80"></div>
+    </div>
+
+    <main
+      class="relative z-10 flex min-h-full flex-col items-center justify-center px-6 py-16"
+    >
+      <!-- Brand mark -->
+      <div class="animate-rise mb-10 flex flex-col items-center">
+        <div class="mb-5 flex h-14 w-14 items-center justify-center" aria-hidden="true">
+          <!-- Icono preciso: silueta de instrumento / odómetro automotriz -->
+          <svg
+            width="56"
+            height="56"
+            viewBox="0 0 56 56"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            class="text-signal"
+          >
+            <circle
+              cx="28"
+              cy="28"
+              r="25"
+              stroke="currentColor"
+              stroke-width="1.5"
+              opacity="0.35"
+            />
+            <circle
+              cx="28"
+              cy="28"
+              r="18"
+              stroke="currentColor"
+              stroke-width="1.5"
+              opacity="0.7"
+            />
+            <!-- Arco de progreso -->
+            <path
+              d="M12.5 36.5 A18 18 0 0 1 43.5 19.5"
+              stroke="#51b9a4"
+              stroke-width="2"
+              stroke-linecap="round"
+              class="animate-pulse-line"
+            />
+            <!-- Aguja -->
+            <path
+              d="M28 28 L38.5 17.5"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+            />
+            <circle cx="28" cy="28" r="2.5" fill="currentColor" />
+            <!-- Marcas de escala -->
+            <path
+              d="M28 12 V15 M40.5 17.5 L38.5 19.5 M44 28 H41 M15.5 17.5 L17.5 19.5 M12 28 H15"
+              stroke="#8b9bb4"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              opacity="0.8"
+            />
+          </svg>
+        </div>
+
+        <p
+          class="font-display text-4xl font-semibold tracking-[0.28em] text-white sm:text-5xl"
+        >
+          REVIO
+        </p>
+        <p
+          class="mt-2 font-body text-[11px] font-medium uppercase tracking-[0.32em] text-steel"
+        >
+          CRM · Concesionarios
+        </p>
+      </div>
+
+      <div class="chrome-rule mb-10 h-px w-40 animate-rise-delay sm:w-56"></div>
+
+      <!-- Copy -->
+      <div class="animate-rise-delay max-w-lg text-center">
+        <h1
+          class="font-display text-3xl font-semibold uppercase tracking-[0.08em] text-white sm:text-4xl"
+        >
+          Sistema en actualización
+        </h1>
+        <p
+          class="mx-auto mt-4 max-w-md text-[15px] leading-relaxed text-steel sm:text-base"
+        >
+          Estamos calibrando la plataforma para tu operación comercial.
+          Volvemos en breve con mayor estabilidad y rendimiento.
+        </p>
+      </div>
+
+      <!-- Status strip -->
+      <div
+        class="animate-rise-delay-2 mt-12 flex w-full max-w-sm flex-col items-center gap-3"
+      >
+        <div
+          class="relative h-px w-full overflow-hidden bg-asphalt-700"
+          aria-hidden="true"
+        >
+          <div
+            class="absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-signal to-transparent animate-scan"
+          ></div>
+        </div>
+        <p
+          class="font-body text-[11px] font-medium uppercase tracking-[0.22em] text-steel/90"
+        >
+          Mantenimiento programado · Acceso temporalmente cerrado
+        </p>
+      </div>
+    </main>
+
+    <footer
+      class="relative z-10 pb-8 text-center font-body text-[11px] tracking-wide text-steel/60"
+    >
+      © <span id="y"></span> REVIO · Confianza en cada kilómetro comercial
+    </footer>
+    <script>
+      document.getElementById('y').textContent = String(new Date().getFullYear());
+    </script>
+  </body>
+</html>

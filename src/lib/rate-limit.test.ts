@@ -10,10 +10,12 @@ const OPTS = { limit: 3, windowMs: 60_000 };
 describe("checkRateLimit", () => {
   beforeEach(() => {
     __resetRateLimitForTests();
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
   });
 
-  it("permits the first request and decrements remaining", () => {
-    const result = checkRateLimit("user:1", OPTS);
+  it("permits the first request and decrements remaining", async () => {
+    const result = await checkRateLimit("user:1", OPTS);
     expect(result).toMatchObject({
       success: true,
       remaining: 2,
@@ -22,45 +24,75 @@ describe("checkRateLimit", () => {
     expect(result.reset).toBeGreaterThan(Date.now());
   });
 
-  it("permits exactly `limit` requests then rejects the next", () => {
-    expect(checkRateLimit("user:1", OPTS).success).toBe(true);
-    expect(checkRateLimit("user:1", OPTS).success).toBe(true);
-    expect(checkRateLimit("user:1", OPTS).success).toBe(true);
-    const over = checkRateLimit("user:1", OPTS);
+  it("permits exactly `limit` requests then rejects the next", async () => {
+    expect((await checkRateLimit("user:1", OPTS)).success).toBe(true);
+    expect((await checkRateLimit("user:1", OPTS)).success).toBe(true);
+    expect((await checkRateLimit("user:1", OPTS)).success).toBe(true);
+    const over = await checkRateLimit("user:1", OPTS);
     expect(over.success).toBe(false);
     expect(over.remaining).toBe(0);
   });
 
-  it("keeps separate counters per key", () => {
-    checkRateLimit("user:1", OPTS);
-    checkRateLimit("user:1", OPTS);
-    checkRateLimit("user:1", OPTS);
-    // user:1 is at the cap, user:2 should still be unaffected.
-    const other = checkRateLimit("user:2", OPTS);
+  it("keeps separate counters per key", async () => {
+    await checkRateLimit("user:1", OPTS);
+    await checkRateLimit("user:1", OPTS);
+    await checkRateLimit("user:1", OPTS);
+    const other = await checkRateLimit("user:2", OPTS);
     expect(other.success).toBe(true);
     expect(other.remaining).toBe(2);
   });
 
-  it("opens a fresh window after `windowMs` elapses", () => {
+  it("opens a fresh window after `windowMs` elapses", async () => {
     vi.useFakeTimers();
     try {
       const t0 = new Date("2026-05-01T00:00:00Z").getTime();
       vi.setSystemTime(t0);
       __resetRateLimitForTests();
 
-      checkRateLimit("user:1", OPTS);
-      checkRateLimit("user:1", OPTS);
-      checkRateLimit("user:1", OPTS);
-      expect(checkRateLimit("user:1", OPTS).success).toBe(false);
+      await checkRateLimit("user:1", OPTS);
+      await checkRateLimit("user:1", OPTS);
+      await checkRateLimit("user:1", OPTS);
+      expect((await checkRateLimit("user:1", OPTS)).success).toBe(false);
 
-      // Jump just past the window.
       vi.setSystemTime(t0 + OPTS.windowMs + 1);
-      const refreshed = checkRateLimit("user:1", OPTS);
+      const refreshed = await checkRateLimit("user:1", OPTS);
       expect(refreshed.success).toBe(true);
       expect(refreshed.remaining).toBe(2);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("uses Upstash when REST credentials are set", async () => {
+    process.env.UPSTASH_REDIS_REST_URL = "https://redis.test";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "token";
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [{ result: 1 }, { result: 1 }],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await checkRateLimit("user:9", OPTS);
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(2);
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to memory when Upstash errors", async () => {
+    process.env.UPSTASH_REDIS_REST_URL = "https://redis.test";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "token";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network")),
+    );
+
+    const result = await checkRateLimit("user:fallback", OPTS);
+    expect(result.success).toBe(true);
+    expect(result.remaining).toBe(2);
+
+    vi.unstubAllGlobals();
   });
 });
 
@@ -82,7 +114,6 @@ describe("rateLimitResponse", () => {
   });
 
   it("clamps Retry-After to a minimum of 1 second", () => {
-    // Reset already in the past — the ceiling math would otherwise give 0.
     const res = rateLimitResponse({
       success: false,
       remaining: 0,
@@ -96,7 +127,6 @@ describe("rateLimitResponse", () => {
 describe("RATE_LIMITS presets", () => {
   it("send and broadcast budgets are independent", async () => {
     __resetRateLimitForTests();
-    // Importing here so the presets stay close to their assertions.
     const { RATE_LIMITS } = await import("./rate-limit");
     expect(RATE_LIMITS.send.limit).toBeGreaterThan(RATE_LIMITS.broadcast.limit);
     expect(RATE_LIMITS.send.windowMs).toBe(60_000);
@@ -106,4 +136,5 @@ describe("RATE_LIMITS presets", () => {
 
 afterEach(() => {
   __resetRateLimitForTests();
+  vi.unstubAllGlobals();
 });

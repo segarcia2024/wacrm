@@ -9,18 +9,17 @@ const appRoot = __dirname;
 /**
  * Baseline security headers applied to every response.
  *
- * CSP ships as `Content-Security-Policy-Report-Only` so the browser
- * surfaces violations in the console without blocking anything — once
- * we have confidence nothing legit trips it (two deploys, a pass on
- * every route), flip the key to `Content-Security-Policy` to enforce.
+ * CSP is enforced (not Report-Only). Next.js still needs
+ * `'unsafe-inline'` / `'unsafe-eval'` for hydration until a nonce
+ * rollout; Meta Embedded Signup and Wompi checkout are allowlisted
+ * explicitly so those third parties keep working under enforce.
  *
- * The rest of the headers are straight blocks, safe to enforce today:
+ * The rest of the headers are straight blocks:
  *   - HSTS: only meaningful on HTTPS (no-op on http://localhost).
  *   - X-Content-Type-Options / X-Frame-Options / Referrer-Policy:
  *     baseline OWASP hardening, no behavioural cost.
- *   - Permissions-Policy: we don't use camera / microphone / etc, so
- *     deny them. A supply-chain compromise or a forgotten plugin
- *     can't silently opt back in.
+ *   - Permissions-Policy: microphone stays same-origin for voice notes;
+ *     camera / geo / payment / usb stay denied.
  */
 const SECURITY_HEADERS = [
   {
@@ -39,13 +38,13 @@ const SECURITY_HEADERS = [
     value: "camera=(), microphone=(self), geolocation=(), payment=(), usb=()",
   },
   {
-    key: "Content-Security-Policy-Report-Only",
+    key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
       // Next.js needs 'unsafe-inline' for its inline hydration script
       // and 'unsafe-eval' in dev + some production optimisations.
-      // Nonce-based CSP is a later project.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      // Meta SDK + Wompi widget are the only third-party script hosts.
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://connect.facebook.net https://checkout.wompi.co",
       // Tailwind + inline style attributes on lots of components.
       "style-src 'self' 'unsafe-inline'",
       // Supabase public-bucket avatars, contact avatars (arbitrary
@@ -56,12 +55,18 @@ const SECURITY_HEADERS = [
       // and Supabase public-bucket audio/video the inbox renders.
       "media-src 'self' blob: https://*.supabase.co",
       "font-src 'self' data:",
-      // Supabase REST + realtime (WSS). All Meta API calls happen
-      // server-side, so graph.facebook.com does not belong here.
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+      // Supabase REST + realtime; Meta SDK + Wompi checkout callbacks.
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://connect.facebook.net https://www.facebook.com https://web.facebook.com https://graph.facebook.com https://*.wompi.co",
+      // Embedded Signup / Wompi widget frames.
+      "frame-src https://www.facebook.com https://web.facebook.com https://checkout.wompi.co",
+      "object-src 'none'",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
+      // Only in production — breaks plain http://localhost in `next dev`.
+      ...(process.env.NODE_ENV === "production"
+        ? ["upgrade-insecure-requests"]
+        : []),
     ].join("; "),
   },
 ] as const;

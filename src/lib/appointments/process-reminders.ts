@@ -1,6 +1,10 @@
 /**
  * Process due appointment reminders (client WhatsApp + agent in-app).
  * Invoked by `/api/appointments/cron` with the service-role client.
+ *
+ * CRM 1.1:
+ *  - 24h reminder for scheduled/confirmed
+ *  - 2h reminder only if still scheduled/confirmed
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -9,6 +13,7 @@ import {
   buildAgentReminderBody,
   buildAgentReminderTitle,
   buildClientReminderText,
+  isAppointment2hReminderDue,
   isAppointmentReminderDue,
 } from "@/lib/appointments/helpers";
 import type { AppointmentType } from "@/types";
@@ -36,6 +41,8 @@ export interface ReminderProcessResult {
   scanned: number;
   clientSent: number;
   agentSent: number;
+  client2hSent: number;
+  agent2hSent: number;
   errors: string[];
 }
 
@@ -47,6 +54,8 @@ export async function processAppointmentReminders(
     scanned: 0,
     clientSent: 0,
     agentSent: 0,
+    client2hSent: 0,
+    agent2hSent: 0,
     errors: [],
   };
 
@@ -57,7 +66,7 @@ export async function processAppointmentReminders(
     .select(
       "*, contact:contacts(id, name, phone), assignee:profiles!appointments_assigned_to_fkey(id, user_id, full_name, email)",
     )
-    .eq("status", "scheduled")
+    .in("status", ["scheduled", "confirmed"])
     .eq("reminder_enabled", true)
     .gt("starts_at", now.toISOString())
     .lte("starts_at", windowEnd)
@@ -71,7 +80,9 @@ export async function processAppointmentReminders(
 
   for (const row of rows ?? []) {
     result.scanned++;
-    if (!isAppointmentReminderDue(row.starts_at as string, now)) continue;
+    const due24 = isAppointmentReminderDue(row.starts_at as string, now);
+    const due2h = isAppointment2hReminderDue(row.starts_at as string, now);
+    if (!due24 && !due2h) continue;
 
     const type = row.type as AppointmentType;
     const typeLabel = TYPE_LABEL_ES[type] ?? TYPE_LABEL_ES.other;
@@ -85,22 +96,26 @@ export async function processAppointmentReminders(
 
     const updates: Record<string, string> = {};
 
-    // —— Client WhatsApp ——
-    if (!row.client_reminder_sent_at) {
-      try {
-        let conversationId = (row.conversation_id as string | null) ?? null;
-        if (!conversationId && row.contact_id) {
-          const { data: conv } = await admin
-            .from("conversations")
-            .select("id")
-            .eq("contact_id", row.contact_id as string)
-            .eq("account_id", row.account_id as string)
-            .order("last_message_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-          conversationId = conv?.id ?? null;
-        }
+    const resolveConversationId = async (): Promise<string | null> => {
+      let conversationId = (row.conversation_id as string | null) ?? null;
+      if (!conversationId && row.contact_id) {
+        const { data: conv } = await admin
+          .from("conversations")
+          .select("id")
+          .eq("contact_id", row.contact_id as string)
+          .eq("account_id", row.account_id as string)
+          .order("last_message_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        conversationId = conv?.id ?? null;
+      }
+      return conversationId;
+    };
 
+    // —— 24h client WhatsApp ——
+    if (due24 && !row.client_reminder_sent_at) {
+      try {
+        const conversationId = await resolveConversationId();
         if (conversationId) {
           const text = buildClientReminderText({
             contactName: contact?.name,
@@ -108,15 +123,11 @@ export async function processAppointmentReminders(
             whenLabel,
             location: row.location as string | null,
           });
-          await sendMessageToConversation(
-            admin,
-            row.account_id as string,
-            {
-              conversationId,
-              messageType: "text",
-              contentText: text,
-            },
-          );
+          await sendMessageToConversation(admin, row.account_id as string, {
+            conversationId,
+            messageType: "text",
+            contentText: text,
+          });
           updates.client_reminder_sent_at = now.toISOString();
           result.clientSent++;
         } else {
@@ -130,8 +141,8 @@ export async function processAppointmentReminders(
       }
     }
 
-    // —— Agent in-app notification (profiles have no WhatsApp phone) ——
-    if (!row.agent_reminder_sent_at && assignee?.user_id) {
+    // —— 24h agent in-app ——
+    if (due24 && !row.agent_reminder_sent_at && assignee?.user_id) {
       try {
         const contactLabel =
           contact?.name?.trim() || contact?.phone || "Cliente";
@@ -156,9 +167,51 @@ export async function processAppointmentReminders(
         const msg = err instanceof Error ? err.message : String(err);
         result.errors.push(`appointment ${row.id} agent: ${msg}`);
       }
-    } else if (!row.agent_reminder_sent_at && !assignee?.user_id) {
-      // No agent assigned — mark as handled so we don't retry forever.
+    } else if (due24 && !row.agent_reminder_sent_at && !assignee?.user_id) {
       updates.agent_reminder_sent_at = now.toISOString();
+    }
+
+    // —— 2h reminders (only while still scheduled/confirmed) ——
+    if (due2h && !row.client_reminder_2h_sent_at) {
+      try {
+        const conversationId = await resolveConversationId();
+        if (conversationId) {
+          const text =
+            `Recordatorio: tu cita (${typeLabel}) es en menos de 2 horas ` +
+            `(${whenLabel}). Te esperamos.`;
+          await sendMessageToConversation(admin, row.account_id as string, {
+            conversationId,
+            messageType: "text",
+            contentText: text,
+          });
+          updates.client_reminder_2h_sent_at = now.toISOString();
+          result.client2hSent++;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push(`appointment ${row.id} client2h: ${msg}`);
+      }
+    }
+
+    if (due2h && !row.agent_reminder_2h_sent_at && assignee?.user_id) {
+      try {
+        const contactLabel =
+          contact?.name?.trim() || contact?.phone || "Cliente";
+        await admin.from("notifications").insert({
+          account_id: row.account_id,
+          user_id: assignee.user_id,
+          type: "appointment_reminder",
+          conversation_id: row.conversation_id ?? null,
+          contact_id: row.contact_id,
+          title: `Cita en 2h: ${typeLabel}`,
+          body: `${contactLabel} · ${whenLabel}`,
+        });
+        updates.agent_reminder_2h_sent_at = now.toISOString();
+        result.agent2hSent++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result.errors.push(`appointment ${row.id} agent2h: ${msg}`);
+      }
     }
 
     if (Object.keys(updates).length > 0) {

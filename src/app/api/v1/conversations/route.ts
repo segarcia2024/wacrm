@@ -18,7 +18,6 @@ import {
   normalizeConversation,
 } from '@/lib/inbox/conversations';
 import { serializeConversation } from '@/lib/api/v1/conversations';
-import type { Conversation } from '@/types';
 
 export async function GET(request: Request) {
   try {
@@ -56,7 +55,7 @@ export async function GET(request: Request) {
     );
     return okList(
       items.map((r) =>
-        serializeConversation(normalizeConversation(r as Conversation))
+        serializeConversation(normalizeConversation(r))
       ),
       nextCursor
     );

@@ -18,7 +18,13 @@ import { NextResponse } from "next/server";
 import type { PostgrestError } from "@supabase/supabase-js";
 
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { isAccountRole } from "@/lib/auth/roles";
+import { isAccountRole, type AccountRole } from "@/lib/auth/roles";
+import {
+  exceedsLicensedSeats,
+  loadSeatUsage,
+  roleConsumesSeat,
+  seatsExceededMessage,
+} from "@/lib/billing/seats";
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -49,7 +55,7 @@ export async function PATCH(
   try {
     const ctx = await requireRole("admin");
 
-    const limit = checkRateLimit(
+    const limit = await checkRateLimit(
       `admin:memberRole:${ctx.userId}`,
       RATE_LIMITS.adminAction,
     );
@@ -81,6 +87,30 @@ export async function PATCH(
       );
     }
 
+    const { data: target } = await ctx.supabase
+      .from("profiles")
+      .select("account_role")
+      .eq("user_id", userId)
+      .eq("account_id", ctx.accountId)
+      .maybeSingle();
+    const currentRole =
+      typeof target?.account_role === "string" ? target.account_role : "";
+    // Only enforce when the member did not already consume a seat
+    // (viewer → agent/admin). Agent ↔ admin must not 409 a full plan.
+    if (roleConsumesSeat(role) && !roleConsumesSeat(currentRole)) {
+      const usage = await loadSeatUsage(ctx.supabase, ctx.accountId);
+      if (
+        exceedsLicensedSeats(usage, role as AccountRole, {
+          countPendingInvites: false,
+        })
+      ) {
+        return NextResponse.json(
+          { error: seatsExceededMessage(usage) },
+          { status: 409 },
+        );
+      }
+    }
+
     const { error } = await ctx.supabase.rpc("set_member_role", {
       p_user_id: userId,
       p_new_role: role,
@@ -101,7 +131,7 @@ export async function DELETE(
   try {
     const ctx = await requireRole("admin");
 
-    const limit = checkRateLimit(
+    const limit = await checkRateLimit(
       `admin:memberRemove:${ctx.userId}`,
       RATE_LIMITS.adminAction,
     );

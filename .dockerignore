@@ -11,3 +11,14 @@ coverage
 .vscode
 .cursor
 terminals
+__tests__
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+vitest.config.ts
+jest.config.js
+jest.setup.ts
+tsconfig.jest.json
+mcp-server
+*.wip.bak

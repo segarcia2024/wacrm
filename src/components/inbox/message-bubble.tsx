@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import type { Message, MessageReaction } from "@/types";
 import {
@@ -14,11 +14,13 @@ import {
   ImageOff,
   CornerDownLeft,
   Sparkles,
+  Download,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { InteractivePreview } from "@/components/interactive/interactive-preview";
+import { LinkifiedText } from "./linkified-text";
 import { useTranslations } from "next-intl";
 
 interface MessageBubbleProps {
@@ -56,8 +58,25 @@ function MediaUnavailable({ label, t }: { label: string, t: ReturnType<typeof us
   );
 }
 
-function MediaImage({ url, alt }: { url: string; alt: string }) {
+function guessImageExtension(blob: Blob): string {
+  const mime = blob.type.toLowerCase();
+  if (mime.includes("png")) return "png";
+  if (mime.includes("webp")) return "webp";
+  if (mime.includes("gif")) return "gif";
+  return "jpg";
+}
+
+function MediaImage({
+  url,
+  alt,
+  downloadLabel,
+}: {
+  url: string;
+  alt: string;
+  downloadLabel: string;
+}) {
   const [src, setSrc] = useState<string | null>(null);
+  const [blob, setBlob] = useState<Blob | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -69,8 +88,9 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
       try {
         const res = await fetch(url);
         if (!res.ok) throw new Error("Failed to load media");
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
+        const nextBlob = await res.blob();
+        const blobUrl = URL.createObjectURL(nextBlob);
+        setBlob(nextBlob);
         setSrc(blobUrl);
       } catch {
         setError(true);
@@ -93,6 +113,36 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadImage]);
 
+  const handleDownload = useCallback(
+    async (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      try {
+        let fileBlob = blob;
+        if (!fileBlob) {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error("Failed to download media");
+          fileBlob = await res.blob();
+        }
+        const objectUrl = URL.createObjectURL(fileBlob);
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = `whatsapp-photo-${Date.now()}.${guessImageExtension(fileBlob)}`;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        // Fallback: open in a new tab if the download path fails
+        // (e.g. cross-origin media without a blob).
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    },
+    [blob, url],
+  );
+
   if (error) {
     return (
       <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
@@ -110,36 +160,50 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }
 
   return (
-    <img
-      src={src ?? ""}
-      alt={alt}
-      className="max-h-64 max-w-60 rounded-lg object-cover"
-      onError={() => setError(true)}
-    />
+    <div className="group/media relative inline-block max-w-60">
+      <img
+        src={src ?? ""}
+        alt={alt}
+        className="max-h-64 max-w-60 rounded-lg object-cover"
+        onError={() => setError(true)}
+      />
+      <button
+        type="button"
+        onClick={handleDownload}
+        title={downloadLabel}
+        aria-label={downloadLabel}
+        className={cn(
+          "absolute bottom-2 right-2 inline-flex h-8 w-8 items-center justify-center rounded-full",
+          "bg-black/60 text-white shadow-sm backdrop-blur-sm",
+          "opacity-100 transition-opacity md:opacity-0 md:group-hover/media:opacity-100",
+          "hover:bg-black/75 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+        )}
+      >
+        <Download className="h-4 w-4" />
+      </button>
+    </div>
   );
 }
 
 function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof useTranslations> }) {
   switch (message.content_type) {
     case "text":
-      return (
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text}
-        </p>
-      );
+      return <LinkifiedText text={message.content_text || ""} />;
 
     case "image":
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Shared image" />
+            <MediaImage
+              url={message.media_url}
+              alt="Shared image"
+              downloadLabel={t("downloadPhoto")}
+            />
           ) : (
             <MediaUnavailable label={t("photo")} t={t} />
           )}
           {message.content_text && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
-            </p>
+            <LinkifiedText text={message.content_text} className="mt-1" />
           )}
         </div>
       );
@@ -157,9 +221,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
             <MediaUnavailable label={t("video")} t={t} />
           )}
           {message.content_text && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
-            </p>
+            <LinkifiedText text={message.content_text} className="mt-1" />
           )}
         </div>
       );
@@ -201,9 +263,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
             {t("template")}
           </span>
           {message.content_text && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
-            </p>
+            <LinkifiedText text={message.content_text} className="mt-1" />
           )}
         </div>
       );
@@ -236,24 +296,24 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
               <CornerDownLeft className="h-3 w-3" />
               {t("buttonReply")}
             </span>
-            <p className="whitespace-pre-wrap break-words text-sm">
-              {message.content_text || t("interactiveReply")}
-            </p>
+            <LinkifiedText
+              text={message.content_text || t("interactiveReply")}
+            />
           </div>
         );
       }
       return (
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || t("interactiveReply")}
-        </p>
+        <LinkifiedText
+          text={message.content_text || t("interactiveReply")}
+        />
       );
     }
 
     default:
       return (
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || t("unsupported")}
-        </p>
+        <LinkifiedText
+          text={message.content_text || t("unsupported")}
+        />
       );
   }
 }

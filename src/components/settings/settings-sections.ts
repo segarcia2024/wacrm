@@ -1,6 +1,7 @@
 import {
   Coins,
   FileText,
+  Flag,
   KeyRound,
   LayoutGrid,
   Palette,
@@ -15,11 +16,6 @@ import {
 
 /**
  * Settings information architecture for the redesigned page.
- *
- * The flat tab strip became a grouped left rail with a new Overview
- * landing. The URL query param stays `?tab=` (deep-linkable, and it
- * keeps the existing links in sidebar.tsx / header.tsx working) — we
- * just map the old values onto the new sections.
  */
 export const SETTINGS_SECTIONS = [
   'overview',
@@ -31,6 +27,7 @@ export const SETTINGS_SECTIONS = [
   'quick-replies',
   'fields',
   'deals',
+  'crm11',
   'members',
   'api',
 ] as const;
@@ -57,6 +54,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   'quick-replies': { id: 'quick-replies', label: 'Quick replies', icon: Zap, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
+  crm11: { id: 'crm11', label: 'CRM 1.1', icon: Flag, group: 'workspace' },
   members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
 };

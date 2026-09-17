@@ -1,20 +1,29 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { isSafeRedirectPath } from "@/lib/auth/safe-redirect";
+import { getClientIp } from "@/lib/http/client-ip";
+import { parseJsonBody } from "@/lib/http/parse-body";
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from "@/lib/rate-limit";
 import { createRouteHandlerClient } from "@/lib/supabase/route-handler";
 
-interface LoginBody {
-  email?: unknown;
-  password?: unknown;
-  inviteToken?: unknown;
-  redirectTo?: unknown;
-}
+const loginBodySchema = z.object({
+  email: z.string().trim().min(1).max(320),
+  password: z.string().min(1).max(256),
+  inviteToken: z.string().trim().max(512).optional(),
+  redirectTo: z.string().max(2048).optional(),
+});
 
-function resolveRedirect(body: LoginBody): string {
-  const inviteToken =
-    typeof body.inviteToken === "string" ? body.inviteToken.trim() : "";
-  const redirectTo =
-    typeof body.redirectTo === "string" ? body.redirectTo.trim() : "";
+/** Generic 401 — never echo Supabase auth messages (enumeration / fingerprinting). */
+const INVALID_CREDENTIALS = "Email o contraseña incorrectos.";
+
+function resolveRedirect(body: z.infer<typeof loginBodySchema>): string {
+  const inviteToken = body.inviteToken?.trim() ?? "";
+  const redirectTo = body.redirectTo?.trim() ?? "";
 
   if (inviteToken) {
     return `/join/${encodeURIComponent(inviteToken)}`;
@@ -27,16 +36,27 @@ function resolveRedirect(body: LoginBody): string {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json().catch(() => null)) as LoginBody | null;
-    const email = typeof body?.email === "string" ? body.email.trim() : "";
-    const password = typeof body?.password === "string" ? body.password : "";
+    const ip = getClientIp(request);
+    const ipLimit = await checkRateLimit(`login:ip:${ip}`, RATE_LIMITS.authLogin);
+    if (!ipLimit.success) return rateLimitResponse(ipLimit);
 
-    if (!email || !password) {
+    const parsed = await parseJsonBody(request, loginBodySchema);
+    if (!parsed.ok) {
+      // Avoid leaking which field failed for credential stuffing probes —
+      // only distinguish missing/empty credentials with a fixed Spanish copy.
       return NextResponse.json(
         { error: "Email y contraseña son obligatorios." },
         { status: 400 },
       );
     }
+
+    const { email, password } = parsed.data;
+
+    const emailLimit = await checkRateLimit(
+      `login:email:${email.toLowerCase()}`,
+      RATE_LIMITS.authLoginEmail,
+    );
+    if (!emailLimit.success) return rateLimitResponse(emailLimit);
 
     const { supabase, applyCookiesTo } = await createRouteHandlerClient();
     const { error } = await supabase.auth.signInWithPassword({
@@ -45,10 +65,10 @@ export async function POST(request: Request) {
     });
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
+      return NextResponse.json({ error: INVALID_CREDENTIALS }, { status: 401 });
     }
 
-    const redirectTo = resolveRedirect(body ?? {});
+    const redirectTo = resolveRedirect(parsed.data);
     return applyCookiesTo(NextResponse.json({ redirectTo }));
   } catch (err) {
     console.error("[auth/login] unexpected error:", err);

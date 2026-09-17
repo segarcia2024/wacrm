@@ -9,6 +9,13 @@ import {
   formatWhatsAppUsername,
   visiblePhone,
 } from '@/lib/contacts/display';
+import {
+  DEAL_ASSIGNMENT_SELECT,
+  DEAL_ASSIGNMENT_SELECT_LEGACY,
+  groupAssignmentsByContact,
+  type AssignedVehicleSummary,
+  type ContactDealAssignment,
+} from '@/lib/contacts/assigned-vehicle';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -44,6 +51,7 @@ import {
   Search,
   Plus,
   Upload,
+  Download,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -67,6 +75,7 @@ const PAGE_SIZE = 25;
 
 interface ContactWithTags extends Contact {
   tags?: Tag[];
+  assigned?: AssignedVehicleSummary | null;
 }
 
 export default function ContactsPage() {
@@ -74,6 +83,7 @@ export default function ContactsPage() {
   const supabase = createClient();
   const canEdit = useCan('send-messages');
   const canEditSettings = useCan('edit-settings');
+  const canExport = useCan('export-contacts');
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +104,7 @@ export default function ContactsPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Bulk selection (page-scoped — only the loaded rows are selectable)
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -206,11 +217,35 @@ export default function ContactsPage() {
       tagsByContact[ct.contact_id].push(ct.tag_id);
     });
 
+    let assignedByContact = new Map<string, AssignedVehicleSummary>();
+    const withVehicle = await supabase
+      .from('deals')
+      .select(DEAL_ASSIGNMENT_SELECT)
+      .in('contact_id', contactIds)
+      .order('created_at', { ascending: false });
+    if (seq !== fetchSeq.current) return;
+    if (withVehicle.error) {
+      const legacy = await supabase
+        .from('deals')
+        .select(DEAL_ASSIGNMENT_SELECT_LEGACY)
+        .in('contact_id', contactIds)
+        .order('created_at', { ascending: false });
+      if (seq !== fetchSeq.current) return;
+      assignedByContact = groupAssignmentsByContact(
+        (legacy.data ?? []) as ContactDealAssignment[],
+      );
+    } else {
+      assignedByContact = groupAssignmentsByContact(
+        (withVehicle.data ?? []) as ContactDealAssignment[],
+      );
+    }
+
     const enriched: ContactWithTags[] = contactRows.map((c) => ({
       ...c,
       tags: (tagsByContact[c.id] ?? [])
         .map((tid) => tagsMap[tid])
         .filter(Boolean),
+      assigned: assignedByContact.get(c.id) ?? null,
     }));
 
     setContacts(enriched);
@@ -322,6 +357,51 @@ export default function ContactsPage() {
     setBulkDeleteOpen(false);
   }
 
+  async function handleExportExcel() {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      const term = search.trim();
+      if (term) params.set('search', term);
+      if (selectedTagIds.length > 0) {
+        params.set('tag_ids', selectedTagIds.join(','));
+      }
+      const qs = params.toString();
+      const res = await fetch(`/api/contacts/export${qs ? `?${qs}` : ''}`, {
+        credentials: 'same-origin',
+      });
+      if (res.status === 403) {
+        toast.error(t('toastExportForbidden'));
+        return;
+      }
+      if (!res.ok) {
+        toast.error(t('toastExportFailed'));
+        return;
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') ?? '';
+      const match = cd.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] ?? 'clientes.csv';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(
+        t.has('toastExportSuccess')
+          ? t('toastExportSuccess')
+          : 'Base de clientes descargada',
+      );
+    } catch {
+      toast.error(t('toastExportFailed'));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const hasNext = page < totalPages - 1;
   const hasPrev = page > 0;
@@ -357,7 +437,7 @@ export default function ContactsPage() {
             {totalCount > 0 ? t('subtitle', { count: totalCount }) : t('subtitleZero')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {canEditSettings && (
             <Button
               variant="outline"
@@ -366,6 +446,21 @@ export default function ContactsPage() {
             >
               <SlidersHorizontal className="size-4" />
               {t('customFieldsBtn')}
+            </Button>
+          )}
+          {canExport && (
+            <Button
+              variant="outline"
+              onClick={handleExportExcel}
+              disabled={exporting}
+              className="border-border text-muted-foreground hover:bg-muted"
+            >
+              {exporting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
+              {t.has('exportExcelBtn') ? t('exportExcelBtn') : 'Exportar Excel'}
             </Button>
           )}
           <GatedButton
@@ -551,6 +646,11 @@ export default function ContactsPage() {
               </TableHead>
               <TableHead className="text-muted-foreground">{t('tableColumns.name')}</TableHead>
               <TableHead className="text-muted-foreground">{t('tableColumns.phone')}</TableHead>
+              <TableHead className="text-muted-foreground">
+                {t.has('tableColumns.vehicle')
+                  ? t('tableColumns.vehicle')
+                  : 'Vehículo'}
+              </TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">{t('tableColumns.email')}</TableHead>
               <TableHead className="text-muted-foreground hidden lg:table-cell">{t('tableColumns.company')}</TableHead>
               <TableHead className="text-muted-foreground hidden md:table-cell">{t('tableColumns.tags')}</TableHead>
@@ -561,7 +661,7 @@ export default function ContactsPage() {
           <TableBody>
             {loading ? (
               <TableRow className="border-border">
-                <TableCell colSpan={8} className="text-center py-12">
+                <TableCell colSpan={9} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <Loader2 className="size-6 animate-spin text-primary" />
                     <p className="text-sm text-muted-foreground">{t('loading')}</p>
@@ -570,7 +670,7 @@ export default function ContactsPage() {
               </TableRow>
             ) : contacts.length === 0 ? (
               <TableRow className="border-border">
-                <TableCell colSpan={8} className="text-center py-12">
+                <TableCell colSpan={9} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <Users className="size-8 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">
@@ -615,6 +715,25 @@ export default function ContactsPage() {
                     {visiblePhone(contact.phone) ||
                       formatWhatsAppUsername(contact.username) ||
                       t('phoneNotShared')}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm">
+                    {contact.assigned ? (
+                      <div>
+                        <div className="text-foreground">{contact.assigned.label}</div>
+                        {contact.assigned.agentName ? (
+                          <div className="text-[11px] text-muted-foreground">
+                            {contact.assigned.agentName}
+                          </div>
+                        ) : null}
+                        {contact.assigned.extraCount > 0 ? (
+                          <div className="text-[11px] text-muted-foreground">
+                            +{contact.assigned.extraCount}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground hidden md:table-cell text-sm">
                     {contact.email || <span className="text-muted-foreground">-</span>}

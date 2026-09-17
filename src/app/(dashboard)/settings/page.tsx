@@ -16,6 +16,7 @@ import { TemplateManager } from '@/components/settings/template-manager';
 import { QuickRepliesManager } from '@/components/settings/quick-replies-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
+import { Crm11Settings } from '@/components/settings/crm11-settings';
 import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import {
@@ -30,10 +31,6 @@ export default function SettingsPage() {
   const { mode } = useTheme();
   const t = useTranslations('Settings');
 
-  // The URL (`?tab=`) is the single source of truth for the active
-  // section — deep-linkable, and it keeps the existing links in the
-  // app sidebar/header working. Legacy tab values (tags, custom-fields)
-  // resolve onto their new home; unknown/empty → the Overview landing.
   const section = resolveSection(searchParams.get('tab'));
 
   const go = (next: SettingsSection) => {
@@ -42,9 +39,6 @@ export default function SettingsPage() {
     router.replace(`/settings?${params.toString()}`, { scroll: false });
   };
 
-  // Cheap, fetch-free rail hints. The Overview landing carries the
-  // full live status/counts; the rail just surfaces the two that are
-  // already in context.
   const hints: Partial<Record<SettingsSection, ReactNode>> = useMemo(
     () => ({
       appearance: mode.charAt(0).toUpperCase() + mode.slice(1),
@@ -63,6 +57,7 @@ export default function SettingsPage() {
     'quick-replies': <QuickRepliesManager />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
+    crm11: <Crm11Settings />,
     members: <MembersTab />,
     api: <ApiKeysSettings />,
   };

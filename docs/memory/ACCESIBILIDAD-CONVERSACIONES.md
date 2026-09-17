@@ -6,7 +6,10 @@ Rama al baseline: `main`
 **BASELINE_SHA:** `0ecdda038dd1f572e13729ec278786a5c52e2037`  
 **BASELINE_TAG:** `pre-accesibilidad-conversaciones-20260730`
 
-Ver también: [PROTOCOLO-ROLLBACK.md](./PROTOCOLO-ROLLBACK.md)
+Ver también:
+
+- [PROTOCOLO-ROLLBACK.md](./PROTOCOLO-ROLLBACK.md)
+- Track hermano layout móvil: [INBOX-MOBILE-RESPONSIVE.md](./INBOX-MOBILE-RESPONSIVE.md) — Fase 4 expone el mismo `ContactSidebar` en un Sheet móvil (botón Info en el hilo); desktop sigue siendo el rail `hidden lg:block`
 
 ## Objetivo de producto
 

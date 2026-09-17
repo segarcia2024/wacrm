@@ -1,6 +1,14 @@
 import { createServerClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+
+import type { Database } from "@/types/database";
+
+import {
+  applyAuthCookies,
+  type AuthCookieToSet,
+} from "./apply-auth-cookies";
 
 /**
  * Supabase client for Route Handlers where auth cookies must be written
@@ -8,9 +16,9 @@ import { NextResponse } from "next/server";
  */
 export async function createRouteHandlerClient() {
   const cookieStore = await cookies();
-  let cookieCarrier = NextResponse.next();
+  const pending: AuthCookieToSet[] = [];
 
-  const supabase = createServerClient(
+  const supabase = createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
@@ -19,25 +27,34 @@ export async function createRouteHandlerClient() {
           return cookieStore.getAll();
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
+          cookiesToSet.forEach((cookie) => {
+            const sameSite = cookie.options?.sameSite;
+            pending.push({
+              name: cookie.name,
+              value: cookie.value,
+              options: {
+                ...cookie.options,
+                sameSite:
+                  sameSite === true
+                    ? "strict"
+                    : sameSite === false
+                      ? undefined
+                      : sameSite,
+              },
+            });
             try {
-              cookieStore.set(name, value, options);
+              cookieStore.set(cookie.name, cookie.value, cookie.options);
             } catch {
               // Ignored when called from a Server Component context.
             }
-            cookieCarrier.cookies.set(name, value, options);
           });
         },
       },
     },
   );
 
-  const applyCookiesTo = <T extends NextResponse>(response: T): T => {
-    cookieCarrier.cookies.getAll().forEach((cookie) => {
-      response.cookies.set(cookie);
-    });
-    return response;
-  };
+  const applyCookiesTo = <T extends NextResponse>(response: T): T =>
+    applyAuthCookies(response, pending);
 
-  return { supabase, applyCookiesTo };
+  return { supabase: supabase as unknown as SupabaseClient, applyCookiesTo };
 }

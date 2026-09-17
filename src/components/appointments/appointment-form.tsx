@@ -161,6 +161,25 @@ export function AppointmentForm({
         toast.error(t("toastFailedSave"));
         return;
       }
+      // CRM 1.1: no-show → one task notification for the advisor (no WhatsApp blast)
+      if (status === "no_show" && appointment.status !== "no_show" && assignedTo) {
+        const { data: agent } = await supabase
+          .from("profiles")
+          .select("user_id")
+          .eq("id", assignedTo)
+          .maybeSingle();
+        if (agent?.user_id && accountId) {
+          await supabase.from("notifications").insert({
+            account_id: accountId,
+            user_id: agent.user_id,
+            type: "appointment_no_show",
+            contact_id: contactId,
+            conversation_id: conversationId ?? null,
+            title: "No-show: seguimiento pendiente",
+            body: "El cliente no asistió a la cita. Crea la próxima acción.",
+          });
+        }
+      }
       toast.success(t("toastUpdated"));
     } else {
       const {
@@ -335,6 +354,8 @@ export function AppointmentForm({
                   {(
                     [
                       "scheduled",
+                      "confirmed",
+                      "rescheduled",
                       "completed",
                       "cancelled",
                       "no_show",

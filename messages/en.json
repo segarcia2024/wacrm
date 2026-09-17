@@ -375,6 +375,7 @@
       "subtitleZero": "Manage your contact list.",
       "customFieldsBtn": "Custom fields",
       "importBtn": "Import",
+      "exportExcelBtn": "Export Excel",
       "addContactBtn": "Add Contact",
       "searchPlaceholder": "Search by name, username, phone, email, or WhatsApp id...",
       "filterByTags": "Filter by tags",
@@ -386,6 +387,7 @@
       "tableColumns": {
         "name": "Name",
         "phone": "Phone",
+        "vehicle": "Vehicle",
         "email": "Email",
         "company": "Company",
         "tags": "Tags",
@@ -411,7 +413,10 @@
       "toastFailedDelete": "Failed to delete contact",
       "toastDeleted": "Contact deleted",
       "toastBulkFailedDelete": "Failed to delete contacts",
-      "toastBulkDeleted": "{count} contacts deleted"
+      "toastBulkDeleted": "{count} contacts deleted",
+      "toastExportFailed": "Failed to export contacts",
+      "toastExportForbidden": "Only admins can download the contacts database",
+      "toastExportSuccess": "Contacts database downloaded"
     },
     "form": {
       "addTitle": "Add Contact",
@@ -1613,6 +1618,7 @@
       "quick-replies": "Quick replies",
       "fields": "Fields & tags",
       "deals": "Deals & currency",
+      "crm11": "CRM 1.1",
       "members": "Team members",
       "api": "API keys"
     },
@@ -1956,6 +1962,49 @@
       "mileageKm": "{km} km",
       "statusReserved": "Reserved",
       "statusSold": "Sold"
+    }
+  },
+  "Billing": {
+    "section": {
+      "title": "A clear price per advisor",
+      "subtitle": "Scale your team without surprises. Pay only for the advisors who use REVIO each month."
+    },
+    "pricing": {
+      "badge": "Recommended plan",
+      "planName": "Advisor",
+      "planDescription": "Estimate your team cost by seats and billing cycle",
+      "seatsLabel": "Users (advisors)",
+      "seatsRange": "Minimum 1 · Maximum {max}",
+      "decreaseSeats": "Decrease users",
+      "increaseSeats": "Increase users",
+      "userOne": "user",
+      "userMany": "users",
+      "cycleLabel": "Billing cycle",
+      "cycleAria": "Billing cycle",
+      "cycle1": "Monthly",
+      "cycle3": "Quarterly",
+      "cycle6": "Semiannual",
+      "cycle12": "Annual",
+      "noDiscount": "no disc.",
+      "perMonthUser": "/ month per user",
+      "savePaying": "Save {percent}% by paying {cycle}",
+      "monthlyBilling": "Monthly billing · COP · per advisor",
+      "lineItem": "{seats} {users} × {months} {monthWord}{discount}",
+      "monthOne": "month",
+      "monthMany": "months",
+      "totalToday": "Total due today",
+      "featureInbox": "Shared WhatsApp inbox",
+      "featurePipeline": "Unlimited sales pipeline",
+      "featureContacts": "Automotive contacts and tags",
+      "featureAutomations": "Automations and quick replies",
+      "featureSupport": "Email support during business hours",
+      "preparing": "Preparing payment…",
+      "subscribe": "Subscribe for {amount}",
+      "secureNote": "Secure payment via Wompi. Cancel anytime.",
+      "insufficientTitle": "Insufficient permissions",
+      "insufficientDesc": "Only a dealership admin can purchase licenses.",
+      "checkoutFailed": "We could not start the payment",
+      "retryLater": "Try again in a few minutes."
     }
   }
 }

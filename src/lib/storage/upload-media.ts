@@ -18,6 +18,67 @@ import { createClient } from "@/lib/supabase/client";
 export const MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
+ * Allowlist of MIME types accepted into account-scoped public buckets.
+ * Client-supplied `File.type` is untrusted — rejecting anything outside
+ * this set blocks HTML/SVG/executable uploads that could become stored XSS
+ * when served with the attacker-chosen Content-Type.
+ */
+export const ALLOWED_MEDIA_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "video/mp4",
+  "video/3gpp",
+  "audio/ogg",
+  "audio/mpeg",
+  "audio/aac",
+  "audio/mp4",
+  "audio/webm",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/plain",
+]);
+
+/** Dangerous extensions even if MIME is spoofed empty/octet-stream. */
+const BLOCKED_EXTENSIONS = new Set([
+  "html",
+  "htm",
+  "svg",
+  "js",
+  "mjs",
+  "css",
+  "exe",
+  "sh",
+  "php",
+  "phtml",
+  "asp",
+  "aspx",
+  "jsp",
+  "cgi",
+]);
+
+function assertSafeUpload(file: File): void {
+  const mime = (file.type || "").toLowerCase().split(";")[0].trim();
+  if (!mime || !ALLOWED_MEDIA_MIME_TYPES.has(mime)) {
+    throw new Error("Unsupported file type.");
+  }
+  const ext = file.name.includes(".")
+    ? file.name.split(".").pop()!.toLowerCase()
+    : "";
+  if (ext && BLOCKED_EXTENSIONS.has(ext)) {
+    throw new Error("Unsupported file extension.");
+  }
+  if (file.size <= 0 || file.size > MEDIA_MAX_BYTES) {
+    throw new Error("File exceeds the maximum allowed size.");
+  }
+}
+
+/**
  * Per-kind upload ceilings that mirror Meta's WhatsApp Cloud API caps so
  * a file that the bucket would accept (≤16 MB) but Meta would reject is
  * caught client-side BEFORE upload — otherwise it lands in storage as an
@@ -80,6 +141,8 @@ export async function uploadAccountMedia(
   bucket: string,
   file: File,
 ): Promise<UploadAccountMediaResult> {
+  assertSafeUpload(file);
+
   const supabase = createClient();
 
   const {

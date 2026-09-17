@@ -38,17 +38,25 @@ describe("auth-cookies", () => {
       },
     } as unknown as import("next/server").NextRequest;
 
-    const deleted: string[] = [];
+    const cleared: Array<{ name: string; value: string; path?: string; maxAge?: number }> =
+      [];
     const response = {
       cookies: {
-        delete: (name: string) => {
-          deleted.push(name);
+        set: (
+          name: string,
+          value: string,
+          options?: { path?: string; maxAge?: number },
+        ) => {
+          cleared.push({ name, value, path: options?.path, maxAge: options?.maxAge });
         },
       },
     } as unknown as import("next/server").NextResponse;
 
     expect(hasSupabaseAuthCookies(request.cookies.getAll())).toBe(true);
     clearSupabaseAuthCookies(request, response);
-    expect(deleted).toEqual(["sb-test-auth-token", "sb-test-auth-token.0"]);
+    expect(cleared).toEqual([
+      { name: "sb-test-auth-token", value: "", path: "/", maxAge: 0 },
+      { name: "sb-test-auth-token.0", value: "", path: "/", maxAge: 0 },
+    ]);
   });
 });

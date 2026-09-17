@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildMediaPath, MEDIA_MAX_BYTES_BY_KIND } from "./upload-media";
+import {
+  ALLOWED_MEDIA_MIME_TYPES,
+  buildMediaPath,
+  MEDIA_MAX_BYTES_BY_KIND,
+} from "./upload-media";
 
 const ACCOUNT = "11111111-2222-3333-4444-555555555555";
 
@@ -42,5 +46,19 @@ describe("MEDIA_MAX_BYTES_BY_KIND", () => {
     expect(MEDIA_MAX_BYTES_BY_KIND.video).toBe(16 * 1024 * 1024);
     expect(MEDIA_MAX_BYTES_BY_KIND.audio).toBe(16 * 1024 * 1024);
     expect(MEDIA_MAX_BYTES_BY_KIND.document).toBe(16 * 1024 * 1024);
+  });
+});
+
+describe("ALLOWED_MEDIA_MIME_TYPES", () => {
+  it("allows WhatsApp-compatible media types", () => {
+    expect(ALLOWED_MEDIA_MIME_TYPES.has("image/jpeg")).toBe(true);
+    expect(ALLOWED_MEDIA_MIME_TYPES.has("audio/ogg")).toBe(true);
+    expect(ALLOWED_MEDIA_MIME_TYPES.has("application/pdf")).toBe(true);
+  });
+
+  it("rejects HTML / script types that enable stored XSS", () => {
+    expect(ALLOWED_MEDIA_MIME_TYPES.has("text/html")).toBe(false);
+    expect(ALLOWED_MEDIA_MIME_TYPES.has("image/svg+xml")).toBe(false);
+    expect(ALLOWED_MEDIA_MIME_TYPES.has("application/javascript")).toBe(false);
   });
 });

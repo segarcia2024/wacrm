@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/use-auth";
 import {
   canDeleteAccount,
   canEditSettings,
+  canExportContacts,
   canManageMembers,
   canSendMessages,
   canTransferOwnership,
@@ -22,7 +23,8 @@ export type CanAction =
   | "send-messages"
   | "view-only"
   | "delete-account"
-  | "transfer-ownership";
+  | "transfer-ownership"
+  | "export-contacts";
 
 /**
  * Inline alternative to `<RequireRole>` for places that need a
@@ -54,6 +56,8 @@ export function useCan(action: CanAction): boolean {
       return canDeleteAccount(accountRole);
     case "transfer-ownership":
       return canTransferOwnership(accountRole);
+    case "export-contacts":
+      return canExportContacts(accountRole);
     default: {
       // Exhaustiveness check — adding a new `CanAction` without a
       // case here fails the typecheck because TS narrows `action`

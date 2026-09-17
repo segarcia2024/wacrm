@@ -26,7 +26,12 @@ import {
   inviteExpiresAt,
   inviteUrl,
 } from "@/lib/auth/invitations";
-import { isAccountRole } from "@/lib/auth/roles";
+import { isAccountRole, type AccountRole } from "@/lib/auth/roles";
+import {
+  exceedsLicensedSeats,
+  loadSeatUsage,
+  seatsExceededMessage,
+} from "@/lib/billing/seats";
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -172,7 +177,7 @@ export async function POST(request: Request) {
     // legitimate admin is far below this; the cap exists to keep
     // a script run in a loop or a compromised admin session from
     // flooding `account_invitations` with rows.
-    const limit = checkRateLimit(
+    const limit = await checkRateLimit(
       `admin:inviteCreate:${ctx.userId}`,
       RATE_LIMITS.adminAction,
     );
@@ -190,6 +195,14 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: "'role' must be one of admin, agent, viewer" },
         { status: 400 },
+      );
+    }
+
+    const usage = await loadSeatUsage(ctx.supabase, ctx.accountId);
+    if (exceedsLicensedSeats(usage, role as AccountRole)) {
+      return NextResponse.json(
+        { error: seatsExceededMessage(usage) },
+        { status: 409 },
       );
     }
 

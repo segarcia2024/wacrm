@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { unauthorizedCronResponse } from "@/lib/auth/cron-secret";
 import { supabaseAdmin } from "@/lib/automations/admin-client";
 import { processAppointmentReminders } from "@/lib/appointments/process-reminders";
 
@@ -8,14 +9,8 @@ import { processAppointmentReminders } from "@/lib/appointments/process-reminder
  * (same secret as automations/flows cron).
  */
 export async function GET(request: Request) {
-  const expected = process.env.AUTOMATION_CRON_SECRET;
-  if (!expected) {
-    return NextResponse.json({ error: "cron not configured" }, { status: 503 });
-  }
-  const supplied = request.headers.get("x-cron-secret") ?? "";
-  if (supplied !== expected) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = unauthorizedCronResponse(request);
+  if (denied) return denied;
 
   try {
     const result = await processAppointmentReminders(supabaseAdmin());
@@ -23,6 +18,6 @@ export async function GET(request: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     console.error("[appointments-cron]", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }

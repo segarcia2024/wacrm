@@ -1,4 +1,5 @@
 import { AiError, type AiUsage, type ChatMessage } from '../types'
+import type { ToolDefinition } from '../tools/types'
 
 // ============================================================
 // Bits shared by the OpenAI + Anthropic adapters.
@@ -10,6 +11,8 @@ export interface ProviderArgs {
   systemPrompt: string
   messages: ChatMessage[]
   timeoutMs: number
+  /** When set, the model may call these CRM tools before replying. */
+  tools?: ToolDefinition[]
 }
 
 /**
@@ -99,11 +102,39 @@ export function mergeConsecutive(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = []
   for (const m of messages) {
     const last = out[out.length - 1]
-    if (last && last.role === m.role) {
+    const canMerge =
+      last &&
+      last.role === m.role &&
+      last.role !== 'tool' &&
+      m.role !== 'tool' &&
+      !last.toolCalls?.length &&
+      !m.toolCalls?.length
+    if (canMerge && last) {
       last.content = `${last.content}\n\n${m.content}`
     } else {
-      out.push({ role: m.role, content: m.content })
+      out.push({ ...m, toolCalls: m.toolCalls ? [...m.toolCalls] : undefined })
     }
   }
   return out
+}
+
+export function toOpenAiTools(tools: ToolDefinition[] | undefined): unknown[] | undefined {
+  if (!tools || tools.length === 0) return undefined
+  return tools.map((t) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
+  }))
+}
+
+export function toAnthropicTools(tools: ToolDefinition[] | undefined): unknown[] | undefined {
+  if (!tools || tools.length === 0) return undefined
+  return tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.parameters,
+  }))
 }

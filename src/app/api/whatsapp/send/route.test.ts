@@ -124,7 +124,20 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => supabaseMock),
 }))
 
-vi.mock('@/lib/flows/admin-client', () => ({
+vi.mock('@/lib/auth/account', () => ({
+  requireRole: vi.fn(async () => ({
+    get supabase() {
+      return supabaseMock
+    },
+    userId: 'user-1',
+    accountId: 'acct-1',
+    role: 'agent',
+    account: { id: 'acct-1', name: 'Acme' },
+  })),
+  toErrorResponse: vi.fn(),
+}))
+
+vi.mock('@/lib/supabase/admin', () => ({
   supabaseAdmin: () => ({
     from: () => {
       const b: Record<string, unknown> = {}

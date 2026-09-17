@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isConversationInAgentScope,
+  isLostDealConversation,
   matchesContactFilters,
   normalizeConversation,
 } from "./conversations";
@@ -185,11 +186,13 @@ describe("normalizeConversation", () => {
           {
             id: "d1",
             status: "open",
+            conversation_id: "c1",
             vehicle: { plate: "ABC123", make: "MAZDA", model: "3" },
           },
           {
             id: "d2",
             status: "won",
+            conversation_id: null,
             vehicle: { plate: "ZZZ999", make: "KIA", model: "RIO" },
           },
         ],
@@ -199,8 +202,45 @@ describe("normalizeConversation", () => {
     expect(normalized.linkedVehicles).toEqual([
       { plate: "ABC123", make: "MAZDA", model: "3" },
     ]);
+    expect(normalized.linkedDeals).toEqual([
+      { id: "d1", status: "open", conversation_id: "c1" },
+      { id: "d2", status: "won", conversation_id: null },
+    ]);
     expect(
       (normalized.contact as unknown as Record<string, unknown>).deals,
     ).toBeUndefined();
+  });
+});
+
+describe("isLostDealConversation", () => {
+  it("hides when a deal linked to the thread is lost", () => {
+    const conv = makeConversation(null);
+    conv.linkedDeals = [
+      { id: "d1", status: "lost", conversation_id: "c1" },
+      { id: "d2", status: "open", conversation_id: null },
+    ];
+    expect(isLostDealConversation(conv)).toBe(true);
+  });
+
+  it("keeps visible when the linked deal is still open", () => {
+    const conv = makeConversation(null);
+    conv.linkedDeals = [
+      { id: "d1", status: "open", conversation_id: "c1" },
+    ];
+    expect(isLostDealConversation(conv)).toBe(false);
+  });
+
+  it("for legacy deals without conversation_id, hides only when all are lost", () => {
+    const conv = makeConversation(null);
+    conv.linkedDeals = [
+      { id: "d1", status: "lost", conversation_id: null },
+      { id: "d2", status: "open", conversation_id: null },
+    ];
+    expect(isLostDealConversation(conv)).toBe(false);
+    conv.linkedDeals = [
+      { id: "d1", status: "lost", conversation_id: null },
+      { id: "d2", status: "lost", conversation_id: null },
+    ];
+    expect(isLostDealConversation(conv)).toBe(true);
   });
 });

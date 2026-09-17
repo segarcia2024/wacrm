@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { formatCurrency } from '@/lib/currency';
+import { vehicleLabelFromDeal } from '@/lib/contacts/assigned-vehicle';
 import {
   contactPrimaryLabel,
   contactSecondaryLabel,
@@ -46,6 +47,7 @@ import {
   LayoutTemplate,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { findPossibleDuplicateIds } from '@/lib/crm11/commercial-integrity';
 
 interface ContactDetailViewProps {
   open: boolean;
@@ -67,6 +69,7 @@ export function ContactDetailView({
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
   const [copiedPhone, setCopiedPhone] = useState(false);
+  const [duplicateIds, setDuplicateIds] = useState<string[]>([]);
 
   // Send template — lets the business initiate (or re-open) a conversation
   // with this contact by sending an approved template. The send route
@@ -118,6 +121,23 @@ export function ContactDetailView({
       setEditPhone(data.phone);
       setEditEmail(data.email ?? '');
       setEditCompany(data.company ?? '');
+
+      // Advisory duplicate detection (no auto-merge)
+      const { data: peers } = await supabase
+        .from('contacts')
+        .select('id, name, phone, phone_normalized')
+        .neq('id', contactId)
+        .limit(500);
+      setDuplicateIds(
+        findPossibleDuplicateIds(peers ?? [], {
+          id: data.id,
+          name: data.name,
+          phone: data.phone,
+          phone_normalized: data.phone_normalized,
+        }),
+      );
+    } else {
+      setDuplicateIds([]);
     }
     setLoading(false);
   }, [contactId, supabase]);
@@ -176,12 +196,21 @@ export function ContactDetailView({
   const fetchDeals = useCallback(async () => {
     if (!contactId) return;
     setLoadingDeals(true);
-    const { data } = await supabase
+    const withVehicle = await supabase
       .from('deals')
-      .select('*, stage:pipeline_stages(*)')
+      .select('*, stage:pipeline_stages(*), vehicle:vehicles(id, plate, make, model, year, status)')
       .eq('contact_id', contactId)
       .order('created_at', { ascending: false });
-    setDeals((data ?? []) as Deal[]);
+    if (withVehicle.error) {
+      const legacy = await supabase
+        .from('deals')
+        .select('*, stage:pipeline_stages(*)')
+        .eq('contact_id', contactId)
+        .order('created_at', { ascending: false });
+      setDeals((legacy.data ?? []) as Deal[]);
+    } else {
+      setDeals((withVehicle.data ?? []) as Deal[]);
+    }
     setLoadingDeals(false);
   }, [contactId, supabase]);
 
@@ -467,6 +496,16 @@ export function ContactDetailView({
               </div>
             </SheetHeader>
 
+            {duplicateIds.length > 0 && (
+              <div className="mx-4 mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                Posible duplicado: {duplicateIds.length}{' '}
+                {duplicateIds.length === 1
+                  ? 'cliente con el mismo teléfono o nombre.'
+                  : 'clientes con el mismo teléfono o nombre.'}{' '}
+                Revisión manual — no se fusionan automáticamente.
+              </div>
+            )}
+
             {/* Tabs */}
             <Tabs defaultValue="details" className="flex-1 flex flex-col min-h-0">
               <TabsList className="bg-muted/50 border-b border-border mx-4 mt-3">
@@ -716,15 +755,26 @@ export function ContactDetailView({
                   <p className="text-xs text-muted-foreground">{t('dealsTab.noDeals')}</p>
                 ) : (
                   <div className="space-y-2">
-                    {deals.map((deal) => (
+                    {deals.map((deal) => {
+                      const vehicleLine = vehicleLabelFromDeal(deal);
+                      const showVehicle =
+                        Boolean(vehicleLine) && vehicleLine !== deal.title;
+                      return (
                       <div
                         key={deal.id}
                         className="rounded-lg border border-border bg-muted/50 p-3"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <p className="text-sm font-medium text-foreground">
-                            {deal.title}
-                          </p>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-foreground">
+                              {deal.title}
+                            </p>
+                            {showVehicle ? (
+                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                {vehicleLine}
+                              </p>
+                            ) : null}
+                          </div>
                           {deal.stage && (
                             <span
                               className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
@@ -758,7 +808,8 @@ export function ContactDetailView({
                           )}
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </TabsContent>

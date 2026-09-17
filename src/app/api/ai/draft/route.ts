@@ -9,6 +9,7 @@ import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
 import { logAiUsage } from '@/lib/ai/usage'
 import { supabaseAdmin } from '@/lib/ai/admin-client'
+import { CRM_TOOLS } from '@/lib/ai/tools/definitions'
 import { AiError } from '@/lib/ai/types'
 
 /**
@@ -17,17 +18,18 @@ import { AiError } from '@/lib/ai/types'
  * Body: { conversation_id }
  * Returns: { draft } — a suggested reply for the agent to edit + send.
  *
- * Uses the account's configured provider/key (BYO). Read-only: it never
- * sends or stores anything, just hands text back to the composer.
+ * Uses the account's configured provider/key (BYO). It may look up live
+ * inventory for an accurate draft but never sends WhatsApp or writes
+ * appointments — booking stays with auto-reply / a human.
  */
 export async function POST(request: Request) {
   try {
     const { supabase, accountId, userId } = await requireRole('agent')
 
-    const userLimit = checkRateLimit(`ai-draft:${userId}`, RATE_LIMITS.aiDraft)
+    const userLimit = await checkRateLimit(`ai-draft:${userId}`, RATE_LIMITS.aiDraft)
     if (!userLimit.success) return rateLimitResponse(userLimit)
     // Also cap the whole team's draws on the shared BYO provider key.
-    const accountLimit = checkRateLimit(
+    const accountLimit = await checkRateLimit(
       `ai-draft-acct:${accountId}`,
       RATE_LIMITS.aiDraftAccount,
     )
@@ -47,7 +49,7 @@ export async function POST(request: Request) {
     // row means "not yours / not found" either way.
     const { data: conversation, error: convErr } = await supabase
       .from('conversations')
-      .select('id')
+      .select('id, contact_id')
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr) {
@@ -102,9 +104,23 @@ export async function POST(request: Request) {
       userPrompt: config.systemPrompt,
       mode: 'draft',
       knowledge,
+      tools: { allowWrites: false },
     })
 
-    const { text, usage } = await generateReply({ config, systemPrompt, messages })
+    const { text, usage } = await generateReply({
+      config,
+      systemPrompt,
+      messages,
+      tools: CRM_TOOLS,
+      toolContext: {
+        db: supabase,
+        accountId,
+        conversationId,
+        contactId: conversation.contact_id,
+        actorUserId: userId,
+        allowWrites: false,
+      },
+    })
 
     // Record spend on the account's BYO key. Best-effort + via the
     // service role (the log has no `authenticated` INSERT policy). This
