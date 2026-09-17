@@ -38,7 +38,7 @@ echo ""
 
 # --- 2. Sincronizar código local → VPS (rsync) ---
 echo "→ [2/4] Sincronizando archivos con rsync..."
-rsync -avz --delete \
+rsync -avz --delete --delete-excluded \
   --exclude 'node_modules' \
   --exclude '.git' \
   --exclude '.next' \
