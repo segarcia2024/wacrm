@@ -18,6 +18,7 @@ Release CRM 1.1:
 
 | Campo | Valor |
 |-------|--------|
+| **RELEASE_SHA** | `1ede50c` (full: ver `git rev-parse v0.10.0-crm11`) |
 | **RELEASE_TAG** | `v0.10.0-crm11` |
 | Versión npm | `0.10.0` |
 
