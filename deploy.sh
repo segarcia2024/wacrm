@@ -48,6 +48,8 @@ rsync -avz --delete \
   --exclude 'tsconfig.tsbuildinfo' \
   --exclude '.DS_Store' \
   --exclude '*.wip.bak' \
+  --exclude '* 2.*' \
+  --exclude '* 2' \
   --exclude 'package-lock 2.json' \
   --exclude '.env 2.example' \
   --exclude '.env.local 2.example' \
